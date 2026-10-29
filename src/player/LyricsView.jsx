@@ -186,30 +186,24 @@ function Tweaks() {
   )
 }
 
-/** Layered, drifting blur of the artwork — Apple's living background, in mono. */
+/**
+ * Layered, drifting blur of the artwork — Apple's living background, in mono.
+ * Performance: each layer is blurred once at a small size and then only
+ * *transformed* (CSS keyframes), so the GPU just moves a cached texture —
+ * no per-frame blurring of a full-screen image.
+ */
 function Backdrop({ track }) {
-  const reduceMotion = useReducedMotion()
   if (!track) return null
   const src = artUrl(track)
-  const layers = [
-    { cls: 'top-[-25%] left-[-20%] h-[95%] w-[95%] opacity-70', rotate: 360, scale: [1.5, 1.85, 1.5], dur: 70 },
-    { cls: 'right-[-25%] bottom-[-25%] h-[95%] w-[95%] opacity-55 contrast-150', rotate: -360, scale: [1.7, 1.4, 1.7], dur: 90 },
-    { cls: 'top-[20%] left-[30%] h-[60%] w-[60%] opacity-40 brightness-150', rotate: 360, scale: [1.2, 1.6, 1.2], dur: 55 },
-  ]
   return (
     <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
       <AnimatePresence>
         {src && (
-          <motion.div key={track.id} className="absolute inset-0" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 1.5 }}>
-            {layers.map((l, i) => (
-              <motion.img
-                key={i}
-                src={src}
-                alt=""
-                className={`absolute rounded-full object-cover blur-[100px] grayscale ${l.cls}`}
-                animate={reduceMotion ? undefined : { rotate: [0, l.rotate], scale: l.scale }}
-                transition={{ duration: l.dur, repeat: Infinity, ease: 'linear' }}
-              />
+          <motion.div key={track.id} className="absolute inset-0" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 1.2 }}>
+            {['drift-a opacity-70 top-[5%] left-[5%]', 'drift-b opacity-50 right-[5%] bottom-[5%]', 'drift-c opacity-40 top-[35%] left-[35%]'].map((cls, i) => (
+              <div key={i} className={`backdrop-layer absolute h-[34vmax] w-[34vmax] ${cls}`}>
+                <img src={src} alt="" className="h-full w-full rounded-full object-cover blur-[22px] grayscale" />
+              </div>
             ))}
           </motion.div>
         )}
@@ -266,16 +260,25 @@ function PlainLyrics({ lines, size }) {
 }
 
 const ANCHOR = 0.32 // active line sits about a third of the way down
+const FINE_POINTER = typeof window !== 'undefined' && window.matchMedia?.('(pointer: fine)').matches
+const EASE = 'cubic-bezier(0.2, 0.9, 0.25, 1)'
 
+/**
+ * Smoothness notes:
+ *  · The clock is read in a requestAnimationFrame loop, not from React
+ *    state — React only re-renders when the *active line* changes.
+ *  · The karaoke fill and instrumental dots are written straight to the DOM
+ *    every frame (60fps, no re-render).
+ *  · Line movement is a CSS transform transition (GPU), staggered with
+ *    transition-delay for the cascade. Soft blur only on desktop.
+ */
 function SyncedLyrics({ lines: raw, size, offset }) {
-  const { time: rawTime } = usePlayerTime()
-  const time = rawTime + offset
-  const { seek } = usePlayer()
+  const { seek, getTime } = usePlayer()
   const reduceMotion = useReducedMotion()
 
   // Add a leading "instrumental" marker when the vocals start late.
   const lines = useMemo(() => (raw[0]?.at > 4 ? [{ at: 0, text: '' }, ...raw] : raw), [raw])
-  const active = activeLineIndex(lines, time)
+  const [active, setActive] = useState(() => activeLineIndex(lines, getTime() + offset))
 
   const viewportRef = useRef(null)
   const lineRefs = useRef([])
@@ -283,6 +286,34 @@ function SyncedLyrics({ lines: raw, size, offset }) {
   const [offsetY, setOffsetY] = useState(0)
   const [browsing, setBrowsing] = useState(false)
   const idleTimer = useRef()
+
+  // Per-frame clock: pick the active line, paint the fill and the dots.
+  useEffect(() => {
+    let raf
+    let last = -2
+    const tick = () => {
+      const t = getTime() + offset
+      const i = activeLineIndex(lines, t)
+      if (i !== last) {
+        last = i
+        setActive(i)
+      }
+      const el = lineRefs.current[i]
+      if (el && i >= 0) {
+        const start = lines[i].at
+        const end = lines[i + 1]?.at ?? start + 5
+        const p = Math.min(1, Math.max(0, (t - start) / Math.max(0.5, end - start - 0.2)))
+        if (lines[i].text) el.style.setProperty('--fill', `${(p * 100).toFixed(1)}%`)
+        else {
+          const dots = el.querySelectorAll('[data-dot]')
+          dots.forEach((d, k) => (d.style.opacity = String(0.25 + 0.75 * Math.min(1, Math.max(0, p * 3 - k)))))
+        }
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [lines, offset, getTime])
 
   // Measure each line's resting position (offsetTop ignores transforms).
   useLayoutEffect(() => {
@@ -311,7 +342,7 @@ function SyncedLyrics({ lines: raw, size, offset }) {
 
   const touchY = useRef(null)
   const focus = Math.max(0, active)
-  const y = layout.height * ANCHOR - (layout.tops[focus] ?? 0) - offsetY
+  const y = Math.round(layout.height * ANCHOR - (layout.tops[focus] ?? 0) - offsetY)
 
   const jump = (line) => {
     clearTimeout(idleTimer.current)
@@ -338,45 +369,30 @@ function SyncedLyrics({ lines: raw, size, offset }) {
         {lines.map((line, i) => {
           const dist = Math.abs(i - active)
           const isActive = i === active
-          const blur = browsing || reduceMotion ? 0 : Math.min(dist, 5) * 0.8
-          const delay = browsing ? 0 : Math.max(0, Math.min(i - active, 10)) * 0.04
-          const end = lines[i + 1]?.at ?? line.at + 5
-          const fill = isActive ? Math.min(100, Math.max(0, ((time - line.at) / Math.max(0.5, end - line.at - 0.2)) * 100)) : 0
+          const opacity = isActive ? 1 : browsing ? 0.6 : i < active ? 0.22 : Math.max(0.16, 0.42 - dist * 0.05)
+          const blur = FINE_POINTER && !browsing && !reduceMotion && dist >= 2 ? Math.min(dist - 1, 3) * 0.9 : 0
+          const delay = browsing || reduceMotion ? 0 : Math.max(0, Math.min(i - active + 1, 10)) * 45
+          const moveMs = browsing ? 120 : reduceMotion ? 0 : 750
           return (
-            <motion.li
+            <li
               key={`${line.at}-${i}`}
               ref={(el) => (lineRefs.current[i] = el)}
               onClick={() => jump(line)}
-              initial={false}
-              animate={{
-                y,
-                opacity: isActive ? 1 : browsing ? 0.6 : i < active ? 0.2 : Math.max(0.16, 0.42 - dist * 0.05),
-                scale: isActive ? 1 : 0.965,
-                filter: `blur(${blur}px)`,
+              style={{
+                fontSize: `calc(clamp(30px, 4vw, 58px) * ${size})`,
+                transform: `translate3d(0, ${y}px, 0) scale(${isActive ? 1 : 0.965})`,
+                opacity,
+                filter: blur ? `blur(${blur}px)` : 'none',
+                transition: `transform ${moveMs}ms ${EASE} ${delay}ms, opacity 450ms ease, filter 450ms ease`,
               }}
-              transition={{
-                y: { type: 'spring', stiffness: 85, damping: 19, mass: 0.9, delay },
-                scale: { type: 'spring', stiffness: 120, damping: 18 },
-                default: { duration: 0.6, ease: 'easeOut' },
-              }}
-              style={{ fontSize: `calc(clamp(30px, 4vw, 58px) * ${size})` }}
-              className="origin-left cursor-pointer py-[0.32em] leading-[1.1] font-extrabold tracking-[-0.025em] hover:!opacity-90"
+              className="origin-left cursor-pointer py-[0.32em] leading-[1.1] font-extrabold tracking-[-0.025em] will-change-transform hover:!opacity-90"
             >
               {line.text ? (
-                isActive ? (
-                  <span
-                    className="lyric-fill"
-                    style={{ '--fill': `${fill}%` }}
-                  >
-                    {line.text}
-                  </span>
-                ) : (
-                  line.text
-                )
+                <span className={isActive ? 'lyric-fill' : undefined}>{line.text}</span>
               ) : (
-                <InstrumentalDots active={isActive} start={line.at} end={end} time={time} />
+                <InstrumentalDots active={isActive} />
               )}
-            </motion.li>
+            </li>
           )
         })}
         <li aria-hidden className="h-[70vh]" />
@@ -388,23 +404,14 @@ function SyncedLyrics({ lines: raw, size, offset }) {
   )
 }
 
-/** Apple's "• • •" for instrumental breaks: dots fill in as the break plays. */
-function InstrumentalDots({ active, start, end, time }) {
-  const progress = active ? Math.min(1, Math.max(0, (time - start) / Math.max(1, end - start))) : 0
+/** Apple's "• • •" for instrumental breaks; the frame loop fills the dots in. */
+function InstrumentalDots({ active }) {
   return (
-    <motion.span
-      className="ml-[0.2em] inline-flex h-[1.1em] items-center gap-[0.3em]"
-      animate={active ? { scale: progress > 0.92 ? 0.6 : [1, 1.2, 1] } : { scale: 1 }}
-      transition={active && progress <= 0.92 ? { duration: 2.4, repeat: Infinity, ease: 'easeInOut' } : { duration: 0.4 }}
-    >
+    <span className={`ml-[0.2em] inline-flex h-[1.1em] items-center gap-[0.3em] ${active ? 'animate-[breathe_2.4s_ease-in-out_infinite]' : ''}`}>
       {[0, 1, 2].map((k) => (
-        <span
-          key={k}
-          className="block h-[0.3em] w-[0.3em] rounded-full bg-white transition-opacity duration-300"
-          style={{ opacity: active ? 0.25 + 0.75 * Math.min(1, Math.max(0, progress * 3 - k)) : 0.3 }}
-        />
+        <span key={k} data-dot className="block h-[0.3em] w-[0.3em] rounded-full bg-white" style={{ opacity: 0.3 }} />
       ))}
-    </motion.span>
+    </span>
   )
 }
 
