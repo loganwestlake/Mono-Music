@@ -4,6 +4,7 @@
   --font-sans: 'Inter', 'Helvetica Neue', Helvetica, Arial, sans-serif;
   --color-ink: #111111;
   --color-paper: #f2f2f2;
+  --font-serif: 'Instrument Serif', 'Times New Roman', serif;
 }
 
 html,
@@ -92,4 +93,55 @@ body {
 }
 .mono-dark .text-neutral-400 {
   color: rgb(255 255 255 / 0.5);
+}
+
+/* ── Editorial film grain over everything (very subtle) ─────────────── */
+body::after {
+  content: '';
+  position: fixed;
+  inset: -50%;
+  z-index: 100;
+  pointer-events: none;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ── Dark mode: the app is pure monochrome, so invert the whole page and
+   flip media back. Elements marked data-noinvert (lyrics view) keep their
+   own colours. ─────────────────────────────────────────────────────── */
+html.theme-dark {
+  filter: invert(1);
+  background: #f2f2f2;
+}
+html.theme-dark :is(img, video, iframe, [data-noinvert]):not([data-noinvert] *) {
+  filter: invert(1) grayscale(1);
+}
+html.theme-dark [data-noinvert] {
+  filter: invert(1);
+}
+
+/* Marquee for the editorial ticker on Home. */
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+.animate-marquee {
+  animation: marquee 60s linear infinite;
+}
+
+/* Karaoke fill for the active lyric line. */
+.lyric-fill {
+  background-image: linear-gradient(90deg, #fff var(--fill, 0%), rgb(255 255 255 / 0.38) calc(var(--fill, 0%) + 6%));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+::selection {
+  background: #111;
+  color: #f2f2f2;
 }

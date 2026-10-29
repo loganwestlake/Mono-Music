@@ -1,7 +1,7 @@
 import { forwardRef } from 'react'
 import { motion, useReducedMotion } from 'framer-motion'
 import { scallopPolygon } from '../lib/shapes'
-import { thumbUrl } from '../lib/tracks'
+import { artUrl } from '../lib/tracks'
 
 // Two scallop outlines, offset by half a petal. Morphing between them makes
 // the edge ripple slowly, like a flower breathing.
@@ -72,7 +72,7 @@ const ScallopedPlayer = forwardRef(function ScallopedPlayer(
           >
             {track ? (
               <img
-                src={thumbUrl(track.id)}
+                src={artUrl(track)}
                 alt=""
                 className={`h-full w-full object-cover opacity-80 ${video ? '' : 'scale-[1.35]'}`}
                 draggable={false}

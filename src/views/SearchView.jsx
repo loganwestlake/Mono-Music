@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link2, Play, Search, X } from 'lucide-react'
+import { History, Link2, Play, Search, X } from 'lucide-react'
 import TrackRow from '../components/TrackRow'
 import { EmptyState, Eyebrow, PageTitle, PillButton, Spinner } from '../components/ui'
 import { GENRES } from '../lib/featured'
@@ -13,7 +13,7 @@ export default function SearchView({ params }) {
   const q = params.get('q') ?? ''
   const [input, setInput] = useState(q)
   const [state, setState] = useState({ status: 'idle', tracks: [], source: null, error: null })
-  const { settings } = useLibrary()
+  const { settings, searches, addSearch, clearSearches } = useLibrary()
   const player = usePlayer()
   const inputRef = useRef(null)
 
@@ -29,13 +29,14 @@ export default function SearchView({ params }) {
     if (!q.trim() || extractVideoId(q)) return setState({ status: 'idle', tracks: [], source: null, error: null })
     let alive = true
     setState((s) => ({ ...s, status: 'loading', error: null }))
+    addSearch(q)
     searchTracks(q, { apiKey: settings.apiKey })
       .then(({ tracks, source }) => alive && setState({ status: 'done', tracks, source, error: null }))
       .catch((err) => alive && setState({ status: 'error', tracks: [], source: null, error: err.message }))
     return () => {
       alive = false
     }
-  }, [q, settings.apiKey])
+  }, [q, settings.apiKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const linkId = extractVideoId(input)
 
@@ -53,7 +54,9 @@ export default function SearchView({ params }) {
 
   return (
     <div className="px-5 pt-8 pb-10 md:px-10 md:pt-12">
-      <PageTitle>Search</PageTitle>
+      <PageTitle>
+        Sea<span className="font-serif font-normal italic">rch</span>
+      </PageTitle>
 
       <form onSubmit={submit} className="sticky top-0 z-10 -mx-5 mt-6 bg-[#F2F2F2]/95 px-5 py-3 backdrop-blur md:-mx-10 md:px-10">
         <div className="flex h-14 items-center gap-3 rounded-full border border-black/10 bg-white px-5 focus-within:border-black/40">
@@ -83,6 +86,35 @@ export default function SearchView({ params }) {
         </div>
         {linkId && <Eyebrow className="mt-2 px-5">YouTube link detected — press Enter to play it</Eyebrow>}
       </form>
+
+      {state.status === 'idle' && searches.length > 0 && (
+        <div className="mt-8">
+          <div className="mb-3 flex items-center justify-between">
+            <Eyebrow className="flex items-center gap-1.5">
+              <History size={11} /> Recent searches
+            </Eyebrow>
+            <button
+              type="button"
+              onClick={clearSearches}
+              className="text-[10px] font-bold uppercase tracking-widest text-neutral-400 hover:text-[#111]"
+            >
+              Clear
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {searches.map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => navigate(`/search?q=${encodeURIComponent(s)}`)}
+                className="rounded-full bg-white px-4 py-2 text-[12px] font-semibold tracking-tight shadow-[0_4px_14px_-10px_rgba(0,0,0,0.5)] transition hover:bg-[#111] hover:text-white"
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {state.status === 'idle' && (
         <div className="mt-8">

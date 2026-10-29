@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Heart, ListEnd, ListPlus, ListStart, MoreHorizontal, Trash2 } from 'lucide-react'
+import { Heart, Link2, ListEnd, ListPlus, ListStart, MoreHorizontal, Radio, Share2, Trash2, User } from 'lucide-react'
 import { usePlayer } from '../player/PlayerProvider'
 import { useLibrary } from '../store/library'
-import { formatTime } from '../lib/tracks'
+import { useToast } from '../store/toast'
+import { navigate } from '../lib/router'
+import { formatTime, youtubeUrl } from '../lib/tracks'
 import { useAddToPlaylist } from './AddToPlaylist'
 import Artwork from './Artwork'
-import { IconButton } from './ui'
+import Menu from './Menu'
 
 /**
  * One song in a list. Clicking plays the whole list from this row.
@@ -14,14 +15,16 @@ import { IconButton } from './ui'
  */
 export default function TrackRow({ track, list, index, number, onRemove }) {
   const player = usePlayer()
-  const { isLiked, toggleLike } = useLibrary()
   const isCurrent = player.current?.id === track.id
-  const liked = isLiked(track.id)
 
   const play = () => (list ? player.playTracks(list, index) : player.playTrack(track))
 
   return (
-    <li className="group relative flex items-center gap-3 rounded-xl px-2 py-2 transition-colors hover:bg-black/[0.04] md:gap-4">
+    <li
+      className={`group relative flex items-center gap-3 rounded-xl px-2 py-2 transition-colors md:gap-4 ${
+        isCurrent ? 'bg-black/[0.05]' : 'hover:bg-black/[0.04]'
+      }`}
+    >
       {number != null && (
         <span className="hidden w-6 text-right text-[11px] font-semibold text-neutral-400 tabular-nums md:block">
           {isCurrent && player.playing ? <Equalizer /> : number}
@@ -37,81 +40,94 @@ export default function TrackRow({ track, list, index, number, onRemove }) {
         </span>
       </button>
       {track.duration > 0 && (
-        <span className="hidden text-[11px] font-medium text-neutral-400 tabular-nums sm:block">
-          {formatTime(track.duration)}
-        </span>
+        <span className="hidden text-[11px] font-medium text-neutral-400 tabular-nums sm:block">{formatTime(track.duration)}</span>
       )}
-      <IconButton
-        icon={Heart}
-        label={liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
-        fill={liked ? 'currentColor' : 'none'}
-        onClick={() => toggleLike(track)}
-        size={17}
-        className={`h-9 w-9 ${liked ? '' : 'opacity-0 group-hover:opacity-100 focus:opacity-100 max-md:opacity-100'}`}
-      />
+      <LikeButton track={track} />
       <TrackMenu track={track} onRemove={onRemove} />
     </li>
   )
 }
 
-export function TrackMenu({ track, onRemove, className = '' }) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef(null)
-  const player = usePlayer()
-  const openAddToPlaylist = useAddToPlaylist()
-
-  useEffect(() => {
-    if (!open) return
-    const close = (e) => !ref.current?.contains(e.target) && setOpen(false)
-    const onKey = (e) => e.key === 'Escape' && setOpen(false)
-    document.addEventListener('pointerdown', close)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('pointerdown', close)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
-
-  const items = [
-    { icon: ListStart, label: 'Play next', run: () => player.playNext(track) },
-    { icon: ListEnd, label: 'Add to queue', run: () => player.enqueue(track) },
-    { icon: ListPlus, label: 'Add to playlist', run: () => openAddToPlaylist(track) },
-    onRemove && { icon: Trash2, label: 'Remove from playlist', run: onRemove },
-  ].filter(Boolean)
-
+/** Heart with a little burst when you like something. */
+export function LikeButton({ track, size = 17, alwaysVisible }) {
+  const { isLiked, toggleLike } = useLibrary()
+  const liked = isLiked(track.id)
   return (
-    <div ref={ref} className={`relative ${className}`}>
-      <IconButton icon={MoreHorizontal} label="More options" onClick={() => setOpen((o) => !o)} size={18} className="h-9 w-9" />
+    <motion.button
+      type="button"
+      aria-label={liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
+      title={liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
+      onClick={() => toggleLike(track)}
+      whileTap={{ scale: 0.8 }}
+      className={`relative grid h-9 w-9 shrink-0 place-items-center rounded-full text-[#111] hover:bg-black/5 ${
+        liked || alwaysVisible ? '' : 'opacity-0 group-hover:opacity-100 focus:opacity-100 max-md:opacity-100'
+      }`}
+    >
+      <motion.span key={liked ? 'on' : 'off'} initial={{ scale: liked ? 0.4 : 1 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 500, damping: 12 }}>
+        <Heart size={size} strokeWidth={1.25} fill={liked ? 'currentColor' : 'none'} />
+      </motion.span>
       <AnimatePresence>
-        {open && (
-          <motion.ul
-            role="menu"
-            initial={{ opacity: 0, y: -4, scale: 0.97 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.15 }}
-            className="absolute top-full right-0 z-40 mt-1 w-52 overflow-hidden rounded-2xl bg-[#111] p-1.5 text-white shadow-2xl"
-          >
-            {items.map(({ icon: Icon, label, run }) => (
-              <li key={label}>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setOpen(false)
-                    run()
-                  }}
-                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[13px] font-medium hover:bg-white/10"
-                >
-                  <Icon size={16} strokeWidth={1.25} />
-                  {label}
-                </button>
-              </li>
-            ))}
-          </motion.ul>
+        {liked && (
+          <motion.span
+            key="burst"
+            className="pointer-events-none absolute inset-0 rounded-full border border-[#111]"
+            initial={{ scale: 0.4, opacity: 0.8 }}
+            animate={{ scale: 1.6, opacity: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.5 }}
+          />
         )}
       </AnimatePresence>
-    </div>
+    </motion.button>
+  )
+}
+
+export function TrackMenu({ track, onRemove, className = '' }) {
+  const player = usePlayer()
+  const toast = useToast()
+  const openAddToPlaylist = useAddToPlaylist()
+
+  const share = async () => {
+    const url = youtubeUrl(track)
+    const text = `${track.title} — ${track.artist}`
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: text, text, url })
+        return
+      } catch {
+        // cancelled → fall through to copy
+      }
+    }
+    navigator.clipboard?.writeText(`${text} ${url}`)
+    toast('Link copied')
+  }
+
+  return (
+    <Menu
+      icon={MoreHorizontal}
+      label="More options"
+      size={18}
+      className={className}
+      items={[
+        { icon: ListStart, label: 'Play next', run: () => player.playNext(track) },
+        { icon: ListEnd, label: 'Add to queue', run: () => player.enqueue(track) },
+        { icon: ListPlus, label: 'Add to playlist', run: () => openAddToPlaylist(track) },
+        'divider',
+        { icon: Radio, label: 'Start radio', run: () => player.startRadio(track) },
+        { icon: User, label: 'Go to artist', run: () => navigate(`/artist/${encodeURIComponent(track.artist)}`) },
+        { icon: Share2, label: 'Share', run: share },
+        {
+          icon: Link2,
+          label: 'Copy YouTube link',
+          run: () => {
+            navigator.clipboard?.writeText(youtubeUrl(track))
+            toast('Link copied')
+          },
+        },
+        onRemove && 'divider',
+        onRemove && { icon: Trash2, label: 'Remove from playlist', run: onRemove },
+      ]}
+    />
   )
 }
 

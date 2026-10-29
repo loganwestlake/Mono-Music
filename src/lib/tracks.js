@@ -76,3 +76,19 @@ export function shuffled(list) {
   }
   return a
 }
+
+/* ── Unresolved tracks ──────────────────────────────────────────────────
+ * Songs that come from Spotify / Deezer / CSV have a title and artist but
+ * no YouTube video yet. They get a stable placeholder id `q:artist|title`
+ * and are matched to a video right before they play (or in the background
+ * after an import).
+ */
+export const unresolvedId = (artist, title) => `q:${artist}|${title}`.toLowerCase()
+export const isUnresolved = (track) => !!track?.id?.startsWith('q:')
+export const youtubeUrl = (track) =>
+  isUnresolved(track)
+    ? `https://www.youtube.com/results?search_query=${encodeURIComponent(`${track.artist} ${track.title}`)}`
+    : `https://www.youtube.com/watch?v=${track.id}`
+
+/** Best artwork URL for a track: its album cover, else the YouTube thumbnail. */
+export const artUrl = (track) => track?.cover || (track && !isUnresolved(track) ? thumbUrl(track.id) : null)

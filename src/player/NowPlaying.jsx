@@ -1,19 +1,24 @@
 import { useRef, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { AnimatePresence, motion, Reorder } from 'framer-motion'
 import {
   ChevronDown,
   Expand,
   Flower2,
+  Gauge,
+  GripVertical,
   Heart,
   ListMusic,
   Maximize2,
   MicVocal,
   MonitorPlay,
+  Moon,
   Pause,
   PictureInPicture2,
   Play,
+  Radio,
   Repeat,
   Repeat1,
+  Save,
   Shuffle,
   SkipBack,
   SkipForward,
@@ -22,14 +27,18 @@ import {
   VolumeX,
   X,
 } from 'lucide-react'
+import Menu from '../components/Menu'
 import ScallopedPlayer from '../components/ScallopedPlayer'
 import Scrubber from '../components/Scrubber'
 import Artwork from '../components/Artwork'
 import { TrackMenu } from '../components/TrackRow'
 import { Eyebrow, IconButton, Spinner } from '../components/ui'
+import { href } from '../lib/router'
 import { formatTime } from '../lib/tracks'
 import { useLibrary } from '../store/library'
+import { useToast } from '../store/toast'
 import { useUi } from '../store/ui'
+import { AdChip } from './PlayerBar'
 import { useMiniWindow } from './MiniWindow'
 import { usePlayer, usePlayerTime } from './PlayerProvider'
 import { activeLineIndex, useLyrics } from './useLyrics'
@@ -39,13 +48,14 @@ import { activeLineIndex, useLyrics } from './useLyrics'
  * (it hosts the YouTube iframe): docked as a right-hand column on wide
  * screens, otherwise a full-screen sheet that slides up over the app.
  */
-export default function NowPlaying({ docked, open, onClose }) {
+export default function NowPlaying({ docked }) {
   const player = usePlayer()
   const { isLiked, toggleLike } = useLibrary()
   const track = player.current
-  const { viewMode } = useUi()
+  const { viewMode, panel, sheetOpen, setSheetOpen } = useUi()
+  const onClose = () => setSheetOpen(false)
   const stageRef = useRef(null)
-  const visible = docked || open
+  const visible = docked ? panel : sheetOpen
   const liked = track && isLiked(track.id)
 
   // Cover the engine with artwork whenever it has nothing clean to show:
@@ -61,11 +71,11 @@ export default function NowPlaying({ docked, open, onClose }) {
       aria-hidden={!visible}
       inert={!visible}
       initial={false}
-      animate={{ y: visible ? 0 : '100%' }}
+      animate={docked ? { x: visible ? 0 : '100%' } : { y: visible ? 0 : '100%' }}
       transition={{ type: 'spring', damping: 32, stiffness: 300 }}
       className={
         docked
-          ? 'no-scrollbar relative h-full overflow-y-auto border-l border-black/10 bg-[#F2F2F2] xl:col-start-3 xl:row-span-2 xl:row-start-1'
+          ? 'no-scrollbar relative h-full min-h-0 overflow-x-hidden overflow-y-auto border-l border-black/10 bg-[#F2F2F2] xl:col-start-3 xl:row-start-1'
           : 'no-scrollbar fixed inset-0 z-50 overflow-y-auto bg-[#F2F2F2]'
       }
     >
@@ -101,6 +111,10 @@ export default function NowPlaying({ docked, open, onClose }) {
             }`}
           />
 
+          <div className="mt-3 flex h-8 items-center">
+            <AdChip />
+          </div>
+
           <Toolbar stageRef={stageRef} />
 
           <StatusLine />
@@ -135,7 +149,7 @@ function Toolbar({ stageRef }) {
   }
 
   return (
-    <div className="mt-5 flex items-center gap-1 rounded-full border border-black/10 p-1">
+    <div className="mt-2 flex flex-wrap items-center justify-center gap-1 rounded-[28px] border border-black/10 p-1">
       <Segment active={viewMode === 'art'} onClick={() => setViewMode('art')} icon={Flower2} label="Art" />
       <Segment active={viewMode === 'video'} onClick={() => setViewMode('video')} icon={MonitorPlay} label="Video" />
       <span className="mx-1 h-5 w-px bg-black/10" />
@@ -159,6 +173,35 @@ function Toolbar({ stageRef }) {
         className="h-9 w-9"
         disabled={!p.current}
       />
+      <Menu
+        icon={Radio}
+        label="Radio"
+        items={[
+          { heading: 'Radio' },
+          p.current && { icon: Radio, label: `Start ${p.current.artist} radio`, run: () => p.startRadio(p.current) },
+        ]}
+      />
+      <Menu
+        icon={Moon}
+        label="Sleep timer"
+        active={!!p.sleep}
+        items={[
+          { heading: 'Sleep timer' },
+          ...[5, 15, 30, 45, 60].map((m) => ({ label: `${m} minutes`, run: () => p.setSleep(m) })),
+          { label: 'End of this song', run: () => p.setSleep('track'), checked: !!p.sleep?.endOfTrack },
+          p.sleep && 'divider',
+          p.sleep && { label: 'Turn off', run: () => p.setSleep(null) },
+        ]}
+      />
+      <Menu
+        icon={Gauge}
+        label="Playback speed"
+        active={p.rate !== 1}
+        items={[
+          { heading: 'Speed' },
+          ...[0.75, 0.9, 1, 1.1, 1.25, 1.5].map((r) => ({ label: `${r}×`, run: () => p.setRate(r), checked: p.rate === r })),
+        ]}
+      />
     </div>
   )
 }
@@ -174,7 +217,7 @@ function Segment({ active, onClick, icon: Icon, label }) {
       }`}
     >
       <Icon size={14} strokeWidth={1.5} />
-      {label}
+      <span className="sr-only sm:not-sr-only">{label}</span>
     </button>
   )
 }
@@ -212,7 +255,16 @@ function TrackInfo({ track, docked }) {
         transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
       >
         <h3 className={`line-clamp-2 leading-[0.95] font-black tracking-tight text-[#111] uppercase ${size}`}>{title}</h3>
-        <Eyebrow className="mt-3 truncate">{track ? track.artist : 'Search for a song to begin'}</Eyebrow>
+        {track ? (
+          <a
+            href={href(`/artist/${encodeURIComponent(track.artist)}`)}
+            className="mt-3 block truncate text-[10px] font-bold uppercase tracking-widest text-neutral-400 hover:text-[#111]"
+          >
+            {track.artist}
+          </a>
+        ) : (
+          <Eyebrow className="mt-3">Search for a song to begin</Eyebrow>
+        )}
       </motion.div>
     </AnimatePresence>
   )
@@ -288,7 +340,7 @@ export function VolumeControl({ className = 'mt-4 hidden w-full max-w-[220px] it
         max={100}
         value={level}
         onChange={(e) => p.setVolume(Number(e.target.value))}
-        className="mono-range flex-1"
+        className="mono-range min-w-0 flex-1"
         style={{ '--pct': `${level}%` }}
       />
     </div>
@@ -355,14 +407,28 @@ function Lyrics({ track }) {
   )
 }
 
-/* ── Queue ──────────────────────────────────────────────────────────── */
+/* ── Queue (drag to reorder) ───────────────────────────────────────── */
 
 function UpNext() {
   const p = usePlayer()
+  const { createPlaylist } = useLibrary()
+  const toast = useToast()
   const [all, setAll] = useState(false)
   const upcoming = p.queue.slice(p.index + 1)
   if (!p.current) return null
-  const shown = all ? upcoming : upcoming.slice(0, 5)
+  const limit = all ? upcoming.length : 8
+  // Reorder needs stable keys; position-suffixed ids stay unique with duplicates.
+  const items = upcoming.slice(0, limit).map((t, n) => ({ key: `${t.id}#${n}`, t }))
+
+  const reorder = (next) => {
+    const moved = next.map((x) => x.t)
+    p.setUpcoming([...moved, ...upcoming.slice(limit)])
+  }
+
+  const saveQueue = () => {
+    const id = createPlaylist(`Queue · ${new Date().toLocaleDateString()}`, p.queue)
+    toast('Saved the queue as a playlist', { action: { label: 'Open', run: () => (window.location.hash = `/playlist/${id}`) } })
+  }
 
   return (
     <section className="border-t border-black/10 px-6 pt-5 pb-[max(env(safe-area-inset-bottom),32px)]">
@@ -370,24 +436,46 @@ function UpNext() {
         <Eyebrow className="flex items-center gap-2 text-[#111]">
           <ListMusic size={13} strokeWidth={1.5} /> Up next · {upcoming.length}
         </Eyebrow>
-        {upcoming.length > 0 && (
+        <div className="flex items-center gap-3">
           <button
             type="button"
-            onClick={p.clearUpcoming}
-            className="text-[10px] font-bold uppercase tracking-widest text-neutral-400 hover:text-[#111]"
+            onClick={saveQueue}
+            className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-widest text-neutral-400 hover:text-[#111]"
           >
-            Clear
+            <Save size={11} /> Save
           </button>
-        )}
+          {upcoming.length > 0 && (
+            <button
+              type="button"
+              onClick={p.clearUpcoming}
+              className="text-[10px] font-bold uppercase tracking-widest text-neutral-400 hover:text-[#111]"
+            >
+              Clear
+            </button>
+          )}
+        </div>
       </div>
       {upcoming.length === 0 ? (
-        <p className="py-2 text-[13px] text-neutral-400">The queue is empty. Add songs with “Add to queue”.</p>
+        <p className="py-2 text-[13px] text-neutral-400">
+          The queue is empty.{' '}
+          <button type="button" onClick={() => p.startRadio(p.current)} className="font-semibold text-[#111] underline">
+            Start a radio
+          </button>{' '}
+          to keep the music going.
+        </p>
       ) : (
-        <ul>
-          {shown.map((t, n) => {
+        <Reorder.Group axis="y" values={items} onReorder={reorder} className="space-y-0.5">
+          {items.map((item, n) => {
             const i = p.index + 1 + n
+            const t = item.t
             return (
-              <li key={`${t.id}-${i}`} className="group flex items-center gap-3 rounded-xl py-1.5 hover:bg-black/[0.04]">
+              <Reorder.Item
+                key={item.key}
+                value={item}
+                className="group flex items-center gap-2 rounded-xl bg-[#F2F2F2] py-1.5 hover:bg-black/[0.04]"
+                whileDrag={{ scale: 1.02, boxShadow: '0 12px 30px -12px rgba(0,0,0,0.35)' }}
+              >
+                <GripVertical size={14} strokeWidth={1.5} className="shrink-0 cursor-grab text-neutral-300 active:cursor-grabbing" />
                 <button type="button" onClick={() => p.jump(i)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
                   <Artwork track={t} className="h-10 w-10 shrink-0" />
                   <span className="min-w-0">
@@ -397,12 +485,12 @@ function UpNext() {
                 </button>
                 <IconButton icon={X} label="Remove from queue" onClick={() => p.removeAt(i)} size={14} className="h-8 w-8" />
                 <TrackMenu track={t} />
-              </li>
+              </Reorder.Item>
             )
           })}
-        </ul>
+        </Reorder.Group>
       )}
-      {upcoming.length > 5 && (
+      {upcoming.length > 8 && (
         <button
           type="button"
           onClick={() => setAll((a) => !a)}

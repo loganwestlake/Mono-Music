@@ -62,7 +62,7 @@ export function PageTitle({ eyebrow, children, className = '' }) {
   return (
     <div className={className}>
       {eyebrow && <Eyebrow className="mb-2">{eyebrow}</Eyebrow>}
-      <h1 className="text-[40px] leading-[0.95] font-black tracking-tight text-[#111] md:text-[56px]">{children}</h1>
+      <h1 className="text-[52px] leading-[0.88] font-black tracking-[-0.04em] text-[#111] md:text-[88px]">{children}</h1>
     </div>
   )
 }

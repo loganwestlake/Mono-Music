@@ -1,3 +1,4 @@
+import { fetchJson, invidiousInstances, pipedInstances, reportInstance } from './instances'
 import { parseIsoDuration, parseVideoTitle } from './tracks'
 
 /**
@@ -8,9 +9,6 @@ import { parseIsoDuration, parseVideoTitle } from './tracks'
  *      community servers and come and go).
  * Results are normalised to tracks: { id, title, artist, duration }.
  */
-
-export const PIPED = ['https://pipedapi.kavin.rocks', 'https://pipedapi.adminforge.de', 'https://api.piped.private.coffee']
-export const INVIDIOUS = ['https://inv.nadeko.net', 'https://invidious.nerdvpn.de', 'https://yewtu.be']
 
 const cache = new Map()
 
@@ -83,42 +81,55 @@ function decodeEntities(text = '') {
 
 /* ── Public, key-less instances ─────────────────────────────────────── */
 
-let preferred = null // remember whichever instance answered last
-
-async function searchPublic(q) {
-  const all = [
-    ...PIPED.map((base) => ({ base, run: () => searchPiped(base, q) })),
-    ...INVIDIOUS.map((base) => ({ base, run: () => searchInvidious(base, q) })),
-  ]
-  const attempts = [...all.filter((a) => a.base === preferred), ...all.filter((a) => a.base !== preferred)]
-
-  for (const attempt of attempts) {
+/** Race healthy instances in small waves; first non-empty answer wins. */
+export async function raceInstances(makePiped, makeInvidious, { wave = 3, waves = 3 } = {}) {
+  const piped = pipedInstances()
+  const inv = invidiousInstances()
+  const attempts = []
+  for (let i = 0; i < Math.max(piped.length, inv.length); i++) {
+    if (piped[i] && makePiped) attempts.push({ base: piped[i], run: () => makePiped(piped[i]) })
+    if (inv[i] && makeInvidious) attempts.push({ base: inv[i], run: () => makeInvidious(inv[i]) })
+  }
+  for (let w = 0; w < waves && attempts.length; w++) {
+    const batch = attempts.splice(0, wave)
     try {
-      const tracks = await attempt.run()
-      if (tracks.length) {
-        preferred = attempt.base
-        return { tracks, source: new URL(attempt.base).hostname }
-      }
+      return await Promise.any(
+        batch.map(({ base, run }) =>
+          run().then(
+            (value) => {
+              if (Array.isArray(value) ? !value.length : !value) throw new Error('empty')
+              reportInstance(base, true)
+              return { value, base }
+            },
+            (err) => {
+              reportInstance(base, false)
+              throw err
+            },
+          ),
+        ),
+      )
     } catch {
-      // try the next one
+      // next wave
     }
   }
-  throw new SearchError(
-    'Search servers are unavailable right now. Paste a YouTube link instead, or add a YouTube API key in Settings.',
-  )
+  throw new Error('No instance answered')
 }
 
-export async function getJson(url, ms = 6000) {
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), ms)
+async function searchPublic(q) {
   try {
-    const res = await fetch(url, { signal: ctrl.signal })
-    if (!res.ok) throw new Error(String(res.status))
-    return await res.json()
-  } finally {
-    clearTimeout(timer)
+    const { value, base } = await raceInstances(
+      (base) => searchPiped(base, q),
+      (base) => searchInvidious(base, q),
+    )
+    return { tracks: value, source: new URL(base).hostname }
+  } catch {
+    throw new SearchError(
+      'Search servers are unavailable right now. Paste a YouTube link instead, or add a YouTube API key in Settings.',
+    )
   }
 }
+
+export const getJson = (url, ms = 6000) => fetchJson(url, ms)
 
 async function searchPiped(base, q) {
   const data = await getJson(`${base}/search?q=${encodeURIComponent(q)}&filter=music_songs`)
@@ -127,11 +138,14 @@ async function searchPiped(base, q) {
     const fallback = await getJson(`${base}/search?q=${encodeURIComponent(q)}&filter=videos`)
     items = (fallback.items || []).filter((i) => i.type === 'stream' && i.url)
   }
-  return items.slice(0, 25).map((i) => {
-    const id = new URL(i.url, 'https://youtube.com').searchParams.get('v')
-    const { title, artist } = parseVideoTitle(i.title, i.uploaderName)
-    return { id, title, artist, duration: i.duration > 0 ? i.duration : 0 }
-  }).filter((t) => t.id)
+  return items
+    .slice(0, 25)
+    .map((i) => {
+      const id = new URL(i.url, 'https://youtube.com').searchParams.get('v')
+      const { title, artist } = parseVideoTitle(i.title, i.uploaderName)
+      return { id, title, artist, duration: i.duration > 0 ? i.duration : 0 }
+    })
+    .filter((t) => t.id)
 }
 
 async function searchInvidious(base, q) {
@@ -143,4 +157,65 @@ async function searchInvidious(base, q) {
       const { title, artist } = parseVideoTitle(i.title, i.author)
       return { id: i.videoId, title, artist, duration: i.lengthSeconds || 0 }
     })
+}
+
+/* ── YouTube playlists (for import) ─────────────────────────────────── */
+
+export async function fetchYouTubePlaylist(listId) {
+  const { value } = await raceInstances(
+    async (base) => {
+      let data = await getJson(`${base}/playlists/${listId}`, 9000)
+      const name = data.name
+      let items = data.relatedStreams || []
+      for (let page = 0; data.nextpage && page < 20; page++) {
+        data = await getJson(`${base}/nextpage/playlists/${listId}?nextpage=${encodeURIComponent(data.nextpage)}`, 9000)
+        items = items.concat(data.relatedStreams || [])
+      }
+      return { name, tracks: items.map((i) => fromStreamItem(i)).filter((t) => t.id) }
+    },
+    async (base) => {
+      const data = await getJson(`${base}/api/v1/playlists/${listId}`, 9000)
+      return {
+        name: data.title,
+        tracks: (data.videos || []).map((v) => {
+          const { title, artist } = parseVideoTitle(v.title, v.author)
+          return { id: v.videoId, title, artist, duration: v.lengthSeconds || 0 }
+        }),
+      }
+    },
+    { wave: 3, waves: 2 },
+  )
+  return value
+}
+
+function fromStreamItem(i) {
+  const id = new URL(i.url, 'https://youtube.com').searchParams.get('v')
+  const { title, artist } = parseVideoTitle(i.title, i.uploaderName)
+  return { id, title, artist, duration: i.duration > 0 ? i.duration : 0 }
+}
+
+/* ── Matching a song (title + artist) to a YouTube video ───────────── */
+
+const norm = (s = '') => s.toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N} ]/gu, '').replace(/\s+/g, ' ').trim()
+
+/**
+ * Find the best YouTube video for a known song (imports, recommendations).
+ * Prefers results whose duration is close to the original and whose title
+ * mentions the song; avoids covers/live/remix unless the song is one.
+ */
+export async function matchTrack({ title, artist, duration }, { apiKey } = {}) {
+  const { tracks } = await searchTracks(`${artist} ${title}`, { apiKey })
+  if (!tracks.length) return null
+  const wantTitle = norm(title)
+  const avoid = /\b(cover|live|karaoke|instrumental|remix|8d|slowed|reverb|sped up|nightcore)\b/
+  const score = (t) => {
+    const name = norm(`${t.title} ${t.artist}`)
+    let s = 0
+    if (name.includes(wantTitle)) s += 5
+    if (name.includes(norm(artist).split(' ')[0])) s += 3
+    if (avoid.test(name) && !avoid.test(wantTitle)) s -= 6
+    if (duration && t.duration) s -= Math.min(6, Math.abs(t.duration - duration) / 8)
+    return s
+  }
+  return [...tracks].sort((a, b) => score(b) - score(a))[0]
 }

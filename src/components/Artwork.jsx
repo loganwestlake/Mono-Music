@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { BLOBS } from '../lib/shapes'
-import { thumbUrl } from '../lib/tracks'
+import { isUnresolved, thumbUrl } from '../lib/tracks'
 
 /**
  * Grayscale image with a monogram fallback. Pass `track` (YouTube artwork)
@@ -8,7 +8,8 @@ import { thumbUrl } from '../lib/tracks'
  */
 export default function Artwork({ track, src, name, shape = 'square', className = '', imgClassName = '' }) {
   const [failed, setFailed] = useState(false)
-  const url = src ?? (track ? thumbUrl(track.id) : null)
+  const url = src ?? track?.cover ?? (track && !isUnresolved(track) ? thumbUrl(track.id) : null)
+  const isYouTubeThumb = !src && !track?.cover && !!track
   const label = name ?? track?.title ?? ''
 
   const radius = shape.startsWith('blob-') ? BLOBS[shape.slice(5)] : undefined
@@ -27,7 +28,7 @@ export default function Artwork({ track, src, name, shape = 'square', className 
           draggable={false}
           onError={() => setFailed(true)}
           // YouTube thumbnails are 4:3 with letterbox bars; scale crops them out.
-          className={`h-full w-full object-cover grayscale contrast-[1.1] ${track && !src ? 'scale-[1.35]' : ''} ${imgClassName}`}
+          className={`h-full w-full object-cover grayscale contrast-[1.1] ${isYouTubeThumb ? 'scale-[1.35]' : ''} ${imgClassName}`}
         />
       ) : (
         <div className="grid h-full w-full place-items-center bg-[#111] text-white">

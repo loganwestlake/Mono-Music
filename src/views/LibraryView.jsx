@@ -1,11 +1,13 @@
-import { Clock, Heart, Plus } from 'lucide-react'
+import { BarChart3, Clock, Download, Heart, Plus } from 'lucide-react'
 import Artwork from '../components/Artwork'
-import { Eyebrow, PageTitle, PillButton } from '../components/ui'
+import { Eyebrow, PillButton } from '../components/ui'
 import { href, navigate } from '../lib/router'
 import { useLibrary } from '../store/library'
+import { useUi } from '../store/ui'
 
 export default function LibraryView() {
   const { playlists, liked, recent, createPlaylist } = useLibrary()
+  const { setImportOpen } = useUi()
 
   const newPlaylist = () => {
     const id = createPlaylist(`Playlist ${playlists.length + 1}`)
@@ -14,10 +16,19 @@ export default function LibraryView() {
 
   return (
     <div className="px-5 pt-8 pb-10 md:px-10 md:pt-12">
-      <div className="flex items-end justify-between gap-4">
-        <PageTitle eyebrow="Your collection">Library</PageTitle>
-        <PillButton icon={Plus} onClick={newPlaylist} className="h-10 px-4">
-          New
+      <Eyebrow>Your collection</Eyebrow>
+      <h1 className="mt-2 text-[52px] leading-[0.88] font-black tracking-[-0.04em] md:text-[88px]">
+        Lib<span className="font-serif font-normal italic">rary</span>
+      </h1>
+      <div className="mt-6 flex flex-wrap gap-2">
+        <PillButton icon={Plus} onClick={newPlaylist} className="h-11 px-5">
+          New playlist
+        </PillButton>
+        <PillButton variant="outline" icon={Download} onClick={() => setImportOpen(true)} className="h-11 px-5">
+          Import from Spotify & more
+        </PillButton>
+        <PillButton variant="outline" icon={BarChart3} onClick={() => navigate('/stats')} className="h-11 px-5">
+          Your stats
         </PillButton>
       </div>
 

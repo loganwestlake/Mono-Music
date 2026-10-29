@@ -1,51 +1,86 @@
-import { getJson, INVIDIOUS, PIPED } from './search'
+import { fetchJson, invidiousInstances, pipedInstances, reportInstance } from './instances'
 
 /**
  * Ad-free playback source. Asks public Piped / Invidious instances for a
  * direct (proxied) media URL so the song can play in a plain <video>
  * element instead of YouTube's ad-carrying player.
  *
- * Resolves to { url, hasVideo, meta: { title, author }, duration }.
- * Throws if no instance answers; the player then falls back to YouTube.
+ * Instances are raced in small waves (healthiest first) so one slow or dead
+ * server doesn't sink the song. `exclude` skips sources that already failed
+ * for this track, so the player can retry elsewhere before giving up.
+ *
+ * Resolves to { url, hasVideo, base, meta: { title, author }, duration }.
  */
 
 const cache = new Map()
-let preferred = null
+const inflight = new Map()
 
-export async function resolveStream(id) {
-  if (cache.has(id)) return cache.get(id)
+const WAVE = 4
+const MAX_WAVES = 4
 
-  const all = [
-    ...PIPED.map((base) => ({ base, run: () => fromPiped(base, id) })),
-    ...INVIDIOUS.map((base) => ({ base, run: () => fromInvidious(base, id) })),
-  ]
-  const attempts = [...all.filter((a) => a.base === preferred), ...all.filter((a) => a.base !== preferred)]
+export function resolveStream(id, { exclude = [] } = {}) {
+  const cached = cache.get(id)
+  if (cached && !exclude.includes(cached.base)) return Promise.resolve(cached)
+  const key = `${id}|${exclude.join(',')}`
+  if (inflight.has(key)) return inflight.get(key)
 
-  for (const attempt of attempts) {
-    try {
-      const result = await attempt.run()
-      if (result?.url) {
-        preferred = attempt.base
-        cache.set(id, result)
-        // Signed media URLs expire after a few hours.
-        setTimeout(() => cache.delete(id), 60 * 60 * 1000)
-        return result
-      }
-    } catch {
-      // try the next instance
-    }
-  }
-  throw new Error('No ad-free source available')
+  const promise = race(id, exclude).finally(() => inflight.delete(key))
+  inflight.set(key, promise)
+  return promise
+}
+
+/** Warm the cache for an upcoming track; failures are silent. */
+export function prefetchStream(id) {
+  if (!id || cache.has(id)) return
+  resolveStream(id).catch(() => {})
 }
 
 export function forgetStream(id) {
   cache.delete(id)
 }
 
+async function race(id, exclude) {
+  const piped = pipedInstances().filter((b) => !exclude.includes(b))
+  const inv = invidiousInstances().filter((b) => !exclude.includes(b))
+  // Interleave so each wave mixes both kinds of server.
+  const attempts = []
+  for (let i = 0; i < Math.max(piped.length, inv.length); i++) {
+    if (piped[i]) attempts.push({ base: piped[i], run: () => fromPiped(piped[i], id) })
+    if (inv[i]) attempts.push({ base: inv[i], run: () => fromInvidious(inv[i], id) })
+  }
+
+  for (let w = 0; w < MAX_WAVES && attempts.length; w++) {
+    const wave = attempts.splice(0, WAVE)
+    try {
+      const result = await Promise.any(
+        wave.map(({ base, run }) =>
+          run().then(
+            (r) => {
+              if (!r?.url) throw new Error('empty')
+              reportInstance(base, true)
+              return { ...r, base }
+            },
+            (err) => {
+              reportInstance(base, false)
+              throw err
+            },
+          ),
+        ),
+      )
+      cache.set(id, result)
+      setTimeout(() => cache.get(id) === result && cache.delete(id), 60 * 60 * 1000) // signed URLs expire
+      return result
+    } catch {
+      // whole wave failed — next wave
+    }
+  }
+  throw new Error('No ad-free source available')
+}
+
 const qualityOf = (label = '') => parseInt(label, 10) || 0
 
 async function fromPiped(base, id) {
-  const data = await getJson(`${base}/streams/${id}`, 8000)
+  const data = await fetchJson(`${base}/streams/${id}`, 7000)
   const meta = { title: data.title, author: data.uploader }
 
   // Prefer a single file with both picture and sound (usually 360p MP4).
@@ -60,7 +95,7 @@ async function fromPiped(base, id) {
 }
 
 async function fromInvidious(base, id) {
-  const data = await getJson(`${base}/api/v1/videos/${id}?local=true`, 8000)
+  const data = await fetchJson(`${base}/api/v1/videos/${id}?local=true`, 7000)
   const meta = { title: data.title, author: data.author }
   const abs = (url) => (url?.startsWith('/') ? `${base}${url}` : url)
 
@@ -82,5 +117,5 @@ function pickAudio(list) {
   return list
     .filter((a) => a.url && /^audio\//i.test(a.type || ''))
     .filter((a) => probe.canPlayType(a.type || '') !== '')
-    .sort((a, b) => (/mp4/i.test(b.type) - /mp4/i.test(a.type)) || b.bitrate - a.bitrate)[0]
+    .sort((a, b) => /mp4/i.test(b.type) - /mp4/i.test(a.type) || b.bitrate - a.bitrate)[0]
 }
