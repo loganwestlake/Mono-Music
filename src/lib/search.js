@@ -9,8 +9,8 @@ import { parseIsoDuration, parseVideoTitle } from './tracks'
  * Results are normalised to tracks: { id, title, artist, duration }.
  */
 
-const PIPED = ['https://pipedapi.kavin.rocks', 'https://pipedapi.adminforge.de', 'https://api.piped.private.coffee']
-const INVIDIOUS = ['https://inv.nadeko.net', 'https://invidious.nerdvpn.de', 'https://yewtu.be']
+export const PIPED = ['https://pipedapi.kavin.rocks', 'https://pipedapi.adminforge.de', 'https://api.piped.private.coffee']
+export const INVIDIOUS = ['https://inv.nadeko.net', 'https://invidious.nerdvpn.de', 'https://yewtu.be']
 
 const cache = new Map()
 
@@ -108,7 +108,7 @@ async function searchPublic(q) {
   )
 }
 
-async function getJson(url, ms = 6000) {
+export async function getJson(url, ms = 6000) {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), ms)
   try {

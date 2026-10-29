@@ -50,5 +50,8 @@ export function parseLrc(lrc) {
     const text = raw.replace(/\[[^\]]*\]/g, '').trim()
     for (const [, m, s] of stamps) lines.push({ at: Number(m) * 60 + Number(s), text })
   }
-  return lines.filter((l) => l.text).sort((a, b) => a.at - b.at)
+  // Empty timestamped lines mark instrumental breaks; keep one per break.
+  return lines
+    .sort((a, b) => a.at - b.at)
+    .filter((l, i, all) => l.text || (i > 0 && all[i - 1].text))
 }

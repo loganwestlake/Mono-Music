@@ -1,12 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   ChevronDown,
+  Expand,
+  Flower2,
   Heart,
   ListMusic,
   Maximize2,
-  Minimize2,
+  MicVocal,
+  MonitorPlay,
   Pause,
+  PictureInPicture2,
   Play,
   Repeat,
   Repeat1,
@@ -23,10 +27,12 @@ import Scrubber from '../components/Scrubber'
 import Artwork from '../components/Artwork'
 import { TrackMenu } from '../components/TrackRow'
 import { Eyebrow, IconButton, Spinner } from '../components/ui'
-import { fetchLyrics } from '../lib/lyrics'
 import { formatTime } from '../lib/tracks'
 import { useLibrary } from '../store/library'
+import { useUi } from '../store/ui'
+import { useMiniWindow } from './MiniWindow'
 import { usePlayer, usePlayerTime } from './PlayerProvider'
+import { activeLineIndex, useLyrics } from './useLyrics'
 
 /**
  * The "Now Playing" view. Rendered exactly once for the app's lifetime
@@ -37,8 +43,17 @@ export default function NowPlaying({ docked, open, onClose }) {
   const player = usePlayer()
   const { isLiked, toggleLike } = useLibrary()
   const track = player.current
+  const { viewMode } = useUi()
+  const stageRef = useRef(null)
   const visible = docked || open
   const liked = track && isLiked(track.id)
+
+  // Cover the engine with artwork whenever it has nothing clean to show:
+  // audio-only streams, and YouTube while paused (its pause screen has UI).
+  const showVeil =
+    !track ||
+    (player.engine === 'stream' && !player.hasVideo) ||
+    (!player.playing && (player.engine === 'youtube' || viewMode === 'art'))
 
   return (
     <motion.aside
@@ -75,11 +90,18 @@ export default function NowPlaying({ docked, open, onClose }) {
           <Timestamps />
 
           <ScallopedPlayer
+            ref={stageRef}
             mountRef={player.mountRef}
             track={track}
             playing={player.playing}
-            className={`mt-6 ${docked ? 'w-[min(280px,80%)]' : 'w-[min(300px,76vw)]'}`}
+            mode={viewMode}
+            showVeil={showVeil}
+            className={`mt-6 ${
+              viewMode === 'video' ? 'w-full' : docked ? 'w-[min(280px,80%)]' : 'w-[min(300px,76vw)]'
+            }`}
           />
+
+          <Toolbar stageRef={stageRef} />
 
           <StatusLine />
 
@@ -96,6 +118,64 @@ export default function NowPlaying({ docked, open, onClose }) {
         <UpNext />
       </div>
     </motion.aside>
+  )
+}
+
+/** Art / Video switch, fullscreen, lyrics, and pop-out mini player. */
+function Toolbar({ stageRef }) {
+  const { viewMode, setViewMode, setLyricsOpen } = useUi()
+  const mini = useMiniWindow()
+  const p = usePlayer()
+
+  const fullscreen = () => {
+    const el = stageRef.current
+    if (!el) return
+    if (document.fullscreenElement) document.exitFullscreen()
+    else el.requestFullscreen?.().catch(() => {})
+  }
+
+  return (
+    <div className="mt-5 flex items-center gap-1 rounded-full border border-black/10 p-1">
+      <Segment active={viewMode === 'art'} onClick={() => setViewMode('art')} icon={Flower2} label="Art" />
+      <Segment active={viewMode === 'video'} onClick={() => setViewMode('video')} icon={MonitorPlay} label="Video" />
+      <span className="mx-1 h-5 w-px bg-black/10" />
+      {viewMode === 'video' && (
+        <IconButton icon={Expand} label="Full screen" onClick={fullscreen} size={16} className="h-9 w-9" disabled={!p.current} />
+      )}
+      <IconButton
+        icon={MicVocal}
+        label="Lyrics"
+        onClick={() => setLyricsOpen(true)}
+        size={16}
+        className="h-9 w-9"
+        disabled={!p.current}
+      />
+      <IconButton
+        icon={PictureInPicture2}
+        label={mini.isOpen ? 'Close mini player' : 'Pop-out mini player'}
+        active={mini.isOpen}
+        onClick={mini.isOpen ? mini.close : mini.open}
+        size={16}
+        className="h-9 w-9"
+        disabled={!p.current}
+      />
+    </div>
+  )
+}
+
+function Segment({ active, onClick, icon: Icon, label }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`flex h-9 items-center gap-1.5 rounded-full px-3 text-[10px] font-bold uppercase tracking-widest transition ${
+        active ? 'bg-[#111] text-white' : 'text-[#111]/60 hover:text-[#111]'
+      }`}
+    >
+      <Icon size={14} strokeWidth={1.5} />
+      {label}
+    </button>
   )
 }
 
@@ -158,9 +238,10 @@ function Controls() {
   )
 }
 
-export function PlayButton({ size = 'lg' }) {
+export function PlayButton({ size = 'lg', tone = 'dark' }) {
   const p = usePlayer()
   const lg = size === 'lg'
+  const colors = tone === 'light' ? 'bg-white text-[#111]' : 'bg-[#111] text-white'
   return (
     <motion.button
       type="button"
@@ -169,7 +250,7 @@ export function PlayButton({ size = 'lg' }) {
       onClick={p.toggle}
       disabled={!p.current || p.status !== 'ready'}
       whileTap={{ scale: 0.92 }}
-      className={`grid shrink-0 place-items-center rounded-full bg-[#111] text-white disabled:opacity-40 ${
+      className={`grid shrink-0 place-items-center rounded-full disabled:opacity-40 ${colors} ${
         lg ? 'h-[76px] w-[76px] shadow-[0_12px_30px_-10px_rgba(0,0,0,0.6)]' : 'h-11 w-11'
       }`}
     >
@@ -214,87 +295,62 @@ export function VolumeControl({ className = 'mt-4 hidden w-full max-w-[220px] it
   )
 }
 
-/* ── Lyrics ─────────────────────────────────────────────────────────── */
+/* ── Lyrics preview (opens the full Apple-style view) ───────────────── */
 
 function Lyrics({ track }) {
-  const [expanded, setExpanded] = useState(false)
-  const [state, setState] = useState({ id: null, loading: false, data: null })
+  const { loading, lines: all, synced } = useLyrics(track)
   const { time } = usePlayerTime()
-  const { seek } = usePlayer()
-  const listRef = useRef(null)
-
-  useEffect(() => {
-    if (!track || track.pending) return setState({ id: null, loading: false, data: null })
-    let alive = true
-    setState({ id: track.id, loading: true, data: null })
-    fetchLyrics(track).then((data) => alive && setState({ id: track.id, loading: false, data }))
-    return () => {
-      alive = false
-    }
-  }, [track?.id, track?.title, track?.pending]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const lines = state.data?.lines ?? []
-  const synced = state.data?.synced
-  const current = useMemo(() => {
-    if (!synced) return -1
-    let i = -1
-    for (let n = 0; n < lines.length; n++) if (time + 0.3 >= lines[n].at) i = n
-    return i
-  }, [lines, synced, time])
-
-  // Keep the active line in view when expanded.
-  useEffect(() => {
-    if (!expanded || current < 0) return
-    listRef.current?.children[current]?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  }, [current, expanded])
-
+  const { setLyricsOpen } = useUi()
   if (!track) return null
 
+  const lines = all.filter((l) => l.text)
+  const current = synced ? activeLineIndex(lines, time) : -1
   const preview = synced ? lines.slice(Math.max(0, current), Math.max(0, current) + 3) : lines.slice(0, 3)
-  const visible = expanded ? lines : preview
 
   return (
     <section className="mt-8 border-t border-black/10 px-6 pt-5 pb-4">
       <div className="flex items-center justify-between">
         <Eyebrow className="text-[#111]">Lyrics</Eyebrow>
-        {lines.length > 3 && (
+        {lines.length > 0 && (
           <IconButton
-            icon={expanded ? Minimize2 : Maximize2}
-            label={expanded ? 'Collapse lyrics' : 'Expand lyrics'}
-            onClick={() => setExpanded((e) => !e)}
+            icon={Maximize2}
+            label="Full-screen lyrics"
+            onClick={() => setLyricsOpen(true)}
             size={16}
             className="-mr-3 h-9 w-9"
           />
         )}
       </div>
 
-      {state.loading ? (
+      {loading ? (
         <p className="mt-2 text-[15px] text-neutral-400">Finding lyrics…</p>
       ) : lines.length === 0 ? (
         <p className="mt-2 text-[15px] text-neutral-400">{track.pending ? 'Loading track…' : 'No lyrics found for this track.'}</p>
       ) : (
-        <ul
-          ref={listRef}
-          className={`no-scrollbar mt-2 space-y-2 ${expanded ? 'max-h-[50vh] overflow-y-auto py-2' : ''}`}
-        >
-          {visible.map((line, n) => {
-            const i = expanded ? n : lines.indexOf(line)
-            const isCurrent = synced ? i === current : false
-            return (
-              <li
-                key={`${line.at}-${i}`}
-                onClick={synced ? () => seek(line.at) : undefined}
-                className={`text-[17px] leading-snug tracking-tight transition-colors duration-500 ${
-                  synced ? 'cursor-pointer' : ''
-                } ${isCurrent || (!synced && !expanded && n === 0) ? 'font-bold text-[#111]' : 'font-medium text-neutral-400/80'}`}
-              >
-                {line.text}
-              </li>
-            )
-          })}
-        </ul>
+        <button type="button" onClick={() => setLyricsOpen(true)} className="mt-2 block w-full text-left">
+          <ul className="space-y-2">
+            <AnimatePresence initial={false} mode="popLayout">
+              {preview.map((line, n) => (
+                <motion.li
+                  key={`${line.at}-${line.text}`}
+                  layout
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+                  className={`text-[17px] leading-snug tracking-tight ${
+                    (synced ? lines.indexOf(line) === current : n === 0)
+                      ? 'font-bold text-[#111]'
+                      : 'font-medium text-neutral-400/80'
+                  }`}
+                >
+                  {line.text}
+                </motion.li>
+              ))}
+            </AnimatePresence>
+          </ul>
+        </button>
       )}
-      {lines.length > 0 && <p className="mt-4 text-[9px] uppercase tracking-widest text-neutral-400">Lyrics via LRCLIB</p>}
     </section>
   )
 }

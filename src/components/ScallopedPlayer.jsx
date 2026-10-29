@@ -1,3 +1,4 @@
+import { forwardRef } from 'react'
 import { motion, useReducedMotion } from 'framer-motion'
 import { scallopPolygon } from '../lib/shapes'
 import { thumbUrl } from '../lib/tracks'
@@ -10,53 +11,70 @@ const SHAPE_B = scallopPolygon({ petals: 12, depth: 0.045, phase: Math.PI / 12 }
 const BREATH = { duration: 7, ease: 'easeInOut', repeat: Infinity, repeatType: 'mirror' }
 
 /**
- * The centrepiece: a scalloped, monochrome window onto the YouTube player.
+ * The centrepiece: a monochrome window onto the player engines.
  *
- * `mountRef` receives the element the YouTube <iframe> lives in. It is
- * oversized and centred so the 16:9 frame fills the mask, and ignores
- * pointer events so YouTube's own UI can never surface. Whenever the video
- * isn't actively playing, the track's artwork covers it, hiding YouTube's
- * cue/pause/end screens too.
+ *   mode="art"   — scalloped, breathing flower mask; video cropped to fill it.
+ *   mode="video" — the full, uncropped 16:9 video in a rounded frame.
+ *
+ * `mountRef` receives the element the engines (YouTube iframe / <video>)
+ * live in. Switching modes only changes CSS — the element never moves, so
+ * playback is never interrupted. Whenever there's nothing clean to show
+ * (paused YouTube, audio-only stream), the track's artwork covers it.
  */
-export default function ScallopedPlayer({ mountRef, track, playing, className = '' }) {
+const ScallopedPlayer = forwardRef(function ScallopedPlayer(
+  { mountRef, track, playing, mode = 'art', showVeil, className = '' },
+  ref,
+) {
   const reduceMotion = useReducedMotion()
+  const video = mode === 'video'
+  const breathe = !video && !reduceMotion
 
   return (
     <motion.div
-      className={`relative aspect-square ${className}`}
-      animate={reduceMotion ? undefined : { scale: [1, 1.025], rotate: [-1.5, 1.5] }}
-      transition={BREATH}
+      ref={ref}
+      layout
+      className={`relative ${video ? 'aspect-video' : 'aspect-square'} ${className}`}
+      animate={breathe ? { scale: [1, 1.025], rotate: [-1.5, 1.5] } : { scale: 1, rotate: 0 }}
+      transition={breathe ? BREATH : { duration: 0.4 }}
     >
-      {/* Soft cast shadow that follows the mask's outline. */}
-      <div aria-hidden className="absolute inset-0 translate-y-3 bg-black/15 blur-2xl" style={{ clipPath: SHAPE_A }} />
+      {/* Soft cast shadow that follows the outline. */}
+      <div
+        aria-hidden
+        className={`absolute inset-0 translate-y-3 bg-black/15 blur-2xl ${video ? 'rounded-3xl' : ''}`}
+        style={video ? undefined : { clipPath: SHAPE_A }}
+      />
 
       <motion.div
-        className="absolute inset-0 overflow-hidden bg-[#111]"
-        initial={{ clipPath: SHAPE_A }}
-        animate={reduceMotion ? undefined : { clipPath: [SHAPE_A, SHAPE_B] }}
-        transition={BREATH}
+        className={`absolute inset-0 overflow-hidden bg-[#111] ${video ? 'rounded-3xl' : ''}`}
+        initial={{ clipPath: video ? 'none' : SHAPE_A }}
+        animate={{ clipPath: video ? 'none' : reduceMotion ? SHAPE_A : [SHAPE_A, SHAPE_B] }}
+        transition={video ? { duration: 0 } : BREATH}
       >
         {/* Grayscale + contrast keeps the video on-brand. */}
         <div className="absolute inset-0 grayscale contrast-[1.2]">
-          {/* YouTube iframe mount point — managed by PlayerProvider. */}
+          {/* Engine mount point — managed by PlayerProvider. */}
           <div
             ref={mountRef}
-            className="pointer-events-none absolute top-1/2 left-1/2 aspect-video h-[135%] -translate-x-1/2 -translate-y-1/2 [&_iframe]:h-full [&_iframe]:w-full"
+            className={`pointer-events-none absolute ${
+              video
+                ? 'inset-0 [&_video]:object-contain'
+                : 'top-1/2 left-1/2 aspect-video h-[135%] -translate-x-1/2 -translate-y-1/2 [&_video]:object-cover'
+            }`}
           />
 
-          {/* Artwork veil: shown whenever the video isn't playing. */}
+          {/* Artwork veil. */}
           <motion.div
             aria-hidden
             className="absolute inset-0 bg-[#111]"
             initial={false}
-            animate={{ opacity: playing ? 0 : 1 }}
-            transition={{ duration: playing ? 0.9 : 0.3 }}
+            animate={{ opacity: showVeil ? 1 : 0 }}
+            transition={{ duration: showVeil ? 0.3 : 0.9 }}
           >
             {track ? (
               <img
                 src={thumbUrl(track.id)}
                 alt=""
-                className="h-full w-full scale-[1.35] object-cover opacity-80"
+                className={`h-full w-full object-cover opacity-80 ${video ? '' : 'scale-[1.35]'}`}
                 draggable={false}
               />
             ) : (
@@ -67,11 +85,15 @@ export default function ScallopedPlayer({ mountRef, track, playing, className = 
           </motion.div>
         </div>
 
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_40%,transparent_45%,rgba(0,0,0,0.45)_100%)]"
-        />
+        {!video && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_40%,transparent_45%,rgba(0,0,0,0.45)_100%)]"
+          />
+        )}
       </motion.div>
     </motion.div>
   )
-}
+})
+
+export default ScallopedPlayer

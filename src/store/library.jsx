@@ -11,7 +11,7 @@ const INITIAL = {
   liked: [],
   recent: [],
   playlists: [],
-  settings: { apiKey: '' },
+  settings: { apiKey: '', adFree: true },
 }
 
 const strip = ({ id, title, artist, duration }) => ({ id, title, artist, duration: duration || 0 })

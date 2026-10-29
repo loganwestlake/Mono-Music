@@ -1,12 +1,16 @@
-import { SkipBack, SkipForward } from 'lucide-react'
+import { MicVocal, PictureInPicture2, SkipBack, SkipForward } from 'lucide-react'
 import Artwork from '../components/Artwork'
 import { IconButton } from '../components/ui'
 import { usePlayer, usePlayerTime } from './PlayerProvider'
 import { PlayButton, VolumeControl } from './NowPlaying'
+import { useMiniWindow } from './MiniWindow'
+import { useUi } from '../store/ui'
 
 /** Compact bar above the tab bar; tap to open the full player. */
 export default function MiniPlayer({ onOpen }) {
   const p = usePlayer()
+  const { setLyricsOpen } = useUi()
+  const mini = useMiniWindow()
   if (!p.current) return null
   const track = p.current
 
@@ -26,6 +30,15 @@ export default function MiniPlayer({ onOpen }) {
         <IconButton icon={SkipBack} label="Previous" onClick={p.prev} size={18} className="hidden sm:grid" />
         <PlayButton size="sm" />
         <IconButton icon={SkipForward} label="Next" onClick={p.next} size={18} />
+        <IconButton icon={MicVocal} label="Lyrics" onClick={() => setLyricsOpen(true)} size={18} className="hidden sm:grid" />
+        <IconButton
+          icon={PictureInPicture2}
+          label={mini.isOpen ? 'Close mini player' : 'Pop-out mini player'}
+          active={mini.isOpen}
+          onClick={mini.isOpen ? mini.close : mini.open}
+          size={18}
+          className="hidden lg:grid"
+        />
         <VolumeControl className="ml-2 hidden w-36 items-center gap-1 lg:flex" />
       </div>
     </div>

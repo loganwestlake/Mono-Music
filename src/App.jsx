@@ -3,11 +3,14 @@ import { Sidebar, TabBar } from './components/Navigation'
 import { AddToPlaylistProvider } from './components/AddToPlaylist'
 import { useMediaQuery } from './components/ui'
 import { navigate, useRoute } from './lib/router'
+import LyricsView from './player/LyricsView'
 import MiniPlayer from './player/MiniPlayer'
+import { MiniWindowProvider } from './player/MiniWindow'
 import NowPlaying from './player/NowPlaying'
 import { PlayerProvider, usePlayer } from './player/PlayerProvider'
 import { LibraryProvider, useLibrary } from './store/library'
 import { ToastProvider, useToast } from './store/toast'
+import { UiProvider, useUi } from './store/ui'
 import ChooseArtistsView from './views/ChooseArtistsView'
 import HomeView from './views/HomeView'
 import LibraryView from './views/LibraryView'
@@ -20,11 +23,15 @@ export default function App() {
   return (
     <LibraryProvider>
       <ToastProvider>
-        <PlayerProvider>
-          <AddToPlaylistProvider>
-            <Root />
-          </AddToPlaylistProvider>
-        </PlayerProvider>
+        <UiProvider>
+          <PlayerProvider>
+            <MiniWindowProvider>
+              <AddToPlaylistProvider>
+                <Root />
+              </AddToPlaylistProvider>
+            </MiniWindowProvider>
+          </PlayerProvider>
+        </UiProvider>
       </ToastProvider>
     </LibraryProvider>
   )
@@ -48,6 +55,7 @@ function Root() {
 function Shell({ route }) {
   const docked = useMediaQuery('(min-width: 1280px)')
   const [sheetOpen, setSheetOpen] = useState(false)
+  const { lyricsOpen, setLyricsOpen } = useUi()
   const mainRef = useRef(null)
 
   // New page → back to top, close the sheet.
@@ -67,6 +75,7 @@ function Shell({ route }) {
       {!docked && <MiniPlayer onOpen={() => setSheetOpen(true)} />}
       <TabBar path={route.path} />
       <NowPlaying docked={docked} open={sheetOpen} onClose={() => setSheetOpen(false)} />
+      <LyricsView open={lyricsOpen} onClose={() => setLyricsOpen(false)} />
     </div>
   )
 }

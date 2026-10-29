@@ -2,7 +2,19 @@ import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 
 /** Thin, round, borderless tap target for a stroke icon. */
-export function IconButton({ icon: Icon, label, onClick, active = false, fill = 'none', size = 20, className = '', dot = true, ...rest }) {
+export function IconButton({
+  icon: Icon,
+  label,
+  onClick,
+  active = false,
+  fill = 'none',
+  size = 20,
+  className = '',
+  dot = true,
+  tone = 'dark',
+  ...rest
+}) {
+  const toneClass = tone === 'light' ? 'text-white hover:bg-white/10' : 'text-[#111] hover:bg-black/5'
   return (
     <motion.button
       type="button"
@@ -11,11 +23,11 @@ export function IconButton({ icon: Icon, label, onClick, active = false, fill = 
       aria-pressed={active || undefined}
       onClick={onClick}
       whileTap={{ scale: 0.88 }}
-      className={`relative grid h-11 w-11 shrink-0 place-items-center rounded-full text-[#111] transition-colors hover:bg-black/5 disabled:opacity-30 ${className}`}
+      className={`relative grid h-11 w-11 shrink-0 place-items-center rounded-full transition-colors disabled:opacity-30 ${toneClass} ${className}`}
       {...rest}
     >
       <Icon size={size} strokeWidth={1.25} fill={fill} />
-      {active && dot && <span className="absolute bottom-1 h-1 w-1 rounded-full bg-[#111]" />}
+      {active && dot && <span className="absolute bottom-1 h-1 w-1 rounded-full bg-current" />}
     </motion.button>
   )
 }

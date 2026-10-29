@@ -7,9 +7,14 @@ A strictly monochrome, editorial music player that uses YouTube as a hidden engi
 ## Features
 
 - **Search** songs and artists, or paste any YouTube link to play it
+- **Ad-free playback** — songs stream through open-source Piped / Invidious servers instead of
+  YouTube's player (falls back to the youtube-nocookie player when a song isn't available)
 - **Player** that keeps playing while you browse — queue, shuffle, repeat, seek, volume
+- **Art / Video views** — the scalloped flower, or the full uncropped video (with full screen)
+- **Pop-out mini player** — an always-on-top window to control music from any tab (Chrome / Edge)
+- **Apple Music–style lyrics** — full-screen, time-synced, blurred animated backdrop
 - **Library** — liked songs, playlists, recently played (saved in your browser)
-- **Synced lyrics** from [LRCLIB](https://lrclib.net)
+- Lyrics from [LRCLIB](https://lrclib.net)
 - **Responsive** — phone (tab bar + full-screen player), laptop (sidebar + player bar), desktop (docked player)
 - **Keyboard shortcuts** — Space, Shift+←/→, ←/→, ↑/↓, L, /
 - Lock-screen / media-key controls, installable as an app

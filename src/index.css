@@ -76,3 +76,20 @@ body {
   outline: 1.5px solid #111;
   outline-offset: 2px;
 }
+
+/* Light-on-dark variant (lyrics view). */
+.mono-dark .mono-range::-webkit-slider-runnable-track {
+  background: linear-gradient(to right, #fff var(--pct, 0%), rgb(255 255 255 / 0.2) var(--pct, 0%));
+}
+.mono-dark .mono-range::-moz-range-track {
+  background: linear-gradient(to right, #fff var(--pct, 0%), rgb(255 255 255 / 0.2) var(--pct, 0%));
+}
+.mono-dark .mono-range::-webkit-slider-thumb {
+  background: #fff;
+}
+.mono-dark .mono-range::-moz-range-thumb {
+  background: #fff;
+}
+.mono-dark .text-neutral-400 {
+  color: rgb(255 255 255 / 0.5);
+}

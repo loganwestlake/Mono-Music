@@ -49,6 +49,19 @@ export default function SettingsView() {
         </button>
       </Block>
 
+      <Block title="Playback">
+        <label className="flex cursor-pointer items-start justify-between gap-6">
+          <span>
+            <span className="block text-[14px] font-semibold tracking-tight">Ad-free playback</span>
+            <span className="mt-1 block text-[13px] leading-relaxed text-neutral-500">
+              Plays songs directly through open-source Piped / Invidious servers instead of YouTube’s player, so no
+              ads. If a song isn’t available that way, it falls back to YouTube automatically.
+            </span>
+          </span>
+          <Toggle checked={settings.adFree !== false} onChange={(v) => updateSettings({ adFree: v })} />
+        </label>
+      </Block>
+
       <Block title="Search source">
         <p className="text-[13px] leading-relaxed text-neutral-500">
           {settings.apiKey
@@ -104,7 +117,7 @@ export default function SettingsView() {
 
       <Block title="About">
         <p className="text-[13px] leading-relaxed text-neutral-500">
-          Mono Music plays videos through YouTube’s official embedded player. Lyrics from LRCLIB. Artist photos from
+          Mono Music plays music via open-source Piped / Invidious servers, or YouTube’s embedded player. Lyrics from LRCLIB. Artist photos from
           Deezer. Not affiliated with any of them.
         </p>
       </Block>
@@ -118,6 +131,24 @@ function Block({ title, children }) {
       <Eyebrow className="mb-4 text-[#111]">{title}</Eyebrow>
       {children}
     </section>
+  )
+}
+
+function Toggle({ checked, onChange }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className={`relative mt-1 h-7 w-12 shrink-0 rounded-full transition-colors ${checked ? 'bg-[#111]' : 'bg-black/15'}`}
+    >
+      <span
+        className={`absolute top-1 left-1 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+          checked ? 'translate-x-5' : ''
+        }`}
+      />
+    </button>
   )
 }
 
