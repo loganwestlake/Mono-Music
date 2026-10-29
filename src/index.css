@@ -1,0 +1,26 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Inter', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --color-ink: #111111;
+  --color-paper: #f2f2f2;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-paper text-ink font-sans antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Hide scrollbars while keeping scroll. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
