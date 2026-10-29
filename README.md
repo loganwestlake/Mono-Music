@@ -1,36 +1,42 @@
 # Mono Music
 
-A strictly monochrome, editorial music app that uses YouTube as a hidden backend.
+A strictly monochrome, editorial music player that uses YouTube as a hidden engine.
 
-React · Tailwind CSS v4 · Framer Motion · Lucide React · Vite
+**Live:** https://loganwestlake.github.io/Mono-Music/
+
+## Features
+
+- **Search** songs and artists, or paste any YouTube link to play it
+- **Player** that keeps playing while you browse — queue, shuffle, repeat, seek, volume
+- **Library** — liked songs, playlists, recently played (saved in your browser)
+- **Synced lyrics** from [LRCLIB](https://lrclib.net)
+- **Responsive** — phone (tab bar + full-screen player), laptop (sidebar + player bar), desktop (docked player)
+- **Keyboard shortcuts** — Space, Shift+←/→, ←/→, ↑/↓, L, /
+- Lock-screen / media-key controls, installable as an app
+
+## Search setup
+
+Search works out of the box through free public servers (Piped / Invidious), which can be slow or offline.
+For reliable search, a listener can paste their own free **YouTube Data API v3** key into the app's
+**Settings** page ([how to get one](https://developers.google.com/youtube/v3/getting-started)).
+The key is stored only in that browser — it is never committed or published with the site.
+Pasting a YouTube link always works without any key.
+
+## Develop
 
 ```bash
 npm install
 npm run dev
 ```
 
-Live site: https://loganwestlake.github.io/Mono-Music/ (deployed by `.github/workflows/deploy.yml` on every push).
-
-Screens are addressable by hash: `#onboarding`, `#artists`, `#now-playing`.
-
-## Dropping in your YouTube videos
-
-Set `videoId` on each entry of `TRACKS` in `src/lib/data.js` (the part after `v=` in a YouTube URL).
-The iframe itself is mounted inside the scalloped mask in `src/components/ScallopedPlayer.jsx`
-(look for `YOUTUBE IFRAME MOUNT POINT`) and driven by the IFrame API hook in
-`src/lib/useYouTubePlayer.js`, so YouTube's own controls never appear.
-
 ## Structure
 
 ```
 src/
-  App.jsx                    screen routing + phone frame on desktop
-  screens/NowPlaying.jsx     scalloped player, track info, controls, lyrics
-  screens/Onboarding.jsx     floating blob portraits + Sign Up
-  screens/ChooseArtists.jsx  staggered avatar grid
-  components/ScallopedPlayer.jsx
-  components/ui.jsx          IconButton, ScreenHeader, Eyebrow, PillButton
-  lib/shapes.js              scallop clip-path generator, blob radii
-  lib/useYouTubePlayer.js    YouTube IFrame API hook
-  lib/data.js                tracks, lyrics, artists (demo content)
+  App.jsx                   routes, responsive shell, keyboard shortcuts
+  player/                   YouTube engine + queue, Now Playing, mini player
+  store/                    library (localStorage) and toasts
+  views/                    Home, Search, Library, Playlist, Settings, onboarding
+  components/               scalloped player, track rows, artwork, navigation…
+  lib/                      search, lyrics, artists, router, track helpers
 ```

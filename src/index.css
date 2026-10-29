@@ -13,6 +13,7 @@ body,
 }
 
 body {
+  overscroll-behavior: none;
   @apply bg-paper text-ink font-sans antialiased;
   -webkit-tap-highlight-color: transparent;
 }
@@ -23,4 +24,55 @@ body {
 }
 .no-scrollbar::-webkit-scrollbar {
   display: none;
+}
+
+/* Hairline range input used for seek + volume. `--pct` drives the fill. */
+.mono-range {
+  appearance: none;
+  height: 18px;
+  background: transparent;
+  cursor: pointer;
+}
+.mono-range:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+.mono-range::-webkit-slider-runnable-track {
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(to right, #111 var(--pct, 0%), rgb(0 0 0 / 0.12) var(--pct, 0%));
+}
+.mono-range::-moz-range-track {
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(to right, #111 var(--pct, 0%), rgb(0 0 0 / 0.12) var(--pct, 0%));
+}
+.mono-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -5px;
+  border-radius: 9999px;
+  background: #111;
+  transition: transform 0.15s;
+}
+.mono-range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 9999px;
+  background: #111;
+}
+.mono-range:hover::-webkit-slider-thumb {
+  transform: scale(1.25);
+}
+.mono-range:focus-visible {
+  outline: 1px solid #111;
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+:focus-visible {
+  outline: 1.5px solid #111;
+  outline-offset: 2px;
 }
