@@ -9,6 +9,8 @@ npm install
 npm run dev
 ```
 
+Live site: https://loganwestlake.github.io/Mono-Music/ (deployed by `.github/workflows/deploy.yml` on every push).
+
 Screens are addressable by hash: `#onboarding`, `#artists`, `#now-playing`.
 
 ## Dropping in your YouTube videos
