@@ -39,22 +39,41 @@ export default function PlayerBar({ docked }) {
   const open = () => (docked ? !ui.panel && ui.togglePanel() : ui.setSheetOpen(true))
 
   return (
-    <div className="relative z-30 border-t border-black/10 bg-[#F2F2F2]/90 backdrop-blur-xl md:col-span-full">
-      <MobileProgress />
-
-      {/* Phone */}
-      <div className="flex items-center gap-3 px-3 py-2 md:hidden">
-        <button type="button" onClick={open} className="flex min-w-0 flex-1 items-center gap-3 text-left" aria-label="Open player">
-          <Artwork track={track} shape="circle" className={`h-11 w-11 shrink-0 ${p.playing ? 'animate-[spin_12s_linear_infinite]' : ''}`} />
-          <span className="min-w-0">
-            <span className="block truncate text-[14px] font-bold tracking-tight">{track.title}</span>
-            <BarSubtitle />
-          </span>
-        </button>
-        <AdChip compact />
-        <PlayButton size="sm" />
-        <IconButton icon={SkipForward} label="Next" onClick={p.next} size={18} />
-      </div>
+    <div className="relative z-30 px-2 pt-1 pb-1.5 md:col-span-full md:border-t md:border-black/10 md:bg-[#F2F2F2]/90 md:p-0 md:backdrop-blur-xl">
+      {/* Phone: floating dark pill — tap to open, swipe sideways to skip */}
+      <motion.div
+        drag="x"
+        dragConstraints={{ left: 0, right: 0 }}
+        dragElastic={0.5}
+        onDragEnd={(_, info) => {
+          if (info.offset.x < -70) p.next()
+          else if (info.offset.x > 70) p.prev()
+        }}
+        className="relative overflow-hidden rounded-[22px] bg-[#111] text-white shadow-[0_14px_30px_-12px_rgba(0,0,0,0.55)] md:hidden"
+      >
+        <div className="flex items-center gap-3 py-2 pr-1.5 pl-2">
+          <button type="button" onClick={open} className="flex min-w-0 flex-1 items-center gap-3 text-left" aria-label="Open player">
+            <AnimatePresence mode="popLayout" initial={false}>
+              <motion.div
+                key={track.id}
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.8 }}
+                className="shrink-0"
+              >
+                <Artwork track={track} className="h-11 w-11 rounded-xl" />
+              </motion.div>
+            </AnimatePresence>
+            <span className="min-w-0">
+              <span className="block truncate text-[14px] font-bold tracking-tight">{track.title}</span>
+              <BarSubtitle light />
+            </span>
+          </button>
+          <PlayButton size="sm" tone="light" />
+          <IconButton icon={SkipForward} label="Next" onClick={p.next} size={20} tone="light" />
+        </div>
+        <MobileProgress />
+      </motion.div>
 
       {/* Tablet / desktop */}
       <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)] items-center gap-6 px-4 py-3 md:grid">
@@ -132,11 +151,15 @@ export default function PlayerBar({ docked }) {
   )
 }
 
-function BarSubtitle() {
+function BarSubtitle({ light }) {
   const p = usePlayer()
   const { ad } = usePlayerTime()
-  const text = ad ? `Ad · ${formatTime(ad.remaining)} left` : p.resolving ? 'Finding song…' : (p.error ?? p.current.artist)
-  return <span className="block truncate text-[10px] font-bold uppercase tracking-widest text-neutral-400">{text}</span>
+  const text = ad ? 'Please wait…' : p.resolving ? 'Finding song…' : (p.error ?? p.current.artist)
+  return (
+    <span className={`block truncate text-[10px] font-bold uppercase tracking-widest ${light ? 'text-white/50' : 'text-neutral-400'}`}>
+      {text}
+    </span>
+  )
 }
 
 function InlineScrubber() {
@@ -152,40 +175,33 @@ function InlineScrubber() {
 }
 
 function MobileProgress() {
-  const { time, duration } = usePlayerTime()
-  const pct = duration ? (time / duration) * 100 : 0
+  const { time, duration, ad } = usePlayerTime()
+  const pct = !ad && duration ? (time / duration) * 100 : 0
   return (
-    <div className="absolute inset-x-0 top-0 h-[2px] bg-black/5 md:hidden">
-      <div className="h-full bg-[#111] transition-[width] duration-300 ease-linear" style={{ width: `${pct}%` }} />
+    <div className="absolute inset-x-3 bottom-0 h-[2px] overflow-hidden rounded-full bg-white/15">
+      <div className="h-full bg-white transition-[width] duration-300 ease-linear" style={{ width: `${pct}%` }} />
     </div>
   )
 }
 
 /**
- * Shown while a YouTube ad plays (only possible when no ad-free copy was
- * found). Counts down; after 5 seconds offers to skip by switching the
- * song to an ad-free source.
+ * Shown while a YouTube ad plays (only when no ad-free copy was found).
+ * The ad is muted and hidden behind the artwork; the listener just sees
+ * "Please wait" — the play button shows a spinner meanwhile.
  */
 export function AdChip({ compact }) {
   const { ad } = usePlayerTime()
-  const { skipAd } = usePlayer()
   return (
     <AnimatePresence>
-      {ad && (
+      {ad && !compact && (
         <motion.div
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.9 }}
-          className="mr-2 flex shrink-0 items-center gap-2 rounded-full bg-[#111] py-1 pr-1 pl-3 text-[10px] font-bold uppercase tracking-widest text-white"
+          className="mr-2 flex shrink-0 items-center gap-2 rounded-full bg-[#111] px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-white"
         >
-          <span className="tabular-nums">{compact ? formatTime(ad.remaining) : `Ad · ${formatTime(ad.remaining)} left`}</span>
-          {ad.elapsed >= 5 ? (
-            <button type="button" onClick={skipAd} className="rounded-full bg-white px-2.5 py-1 text-[#111]">
-              Skip
-            </button>
-          ) : (
-            <span className="rounded-full bg-white/15 px-2.5 py-1 tabular-nums">Skip in {Math.ceil(5 - ad.elapsed)}</span>
-          )}
+          <span className="h-3 w-3 animate-spin rounded-full border-[1.5px] border-white border-t-transparent" />
+          Please wait…
         </motion.div>
       )}
     </AnimatePresence>

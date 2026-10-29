@@ -177,7 +177,7 @@ export function Drawer({ path }) {
 export function MobileTopBar() {
   const { setDrawerOpen } = useUi()
   return (
-    <div className="flex items-center justify-between px-3 pt-[max(env(safe-area-inset-top),8px)] md:hidden">
+    <div className="sticky top-0 z-20 flex items-center justify-between bg-[#F2F2F2]/85 px-2 pt-[max(env(safe-area-inset-top),6px)] pb-1 backdrop-blur-xl md:hidden">
       <button
         type="button"
         onClick={() => setDrawerOpen(true)}
@@ -247,7 +247,7 @@ function PlaylistLink({ to, active, name, count, icon: Icon, tracks, onClick }) 
 export function TabBar({ path }) {
   const tabs = LINKS.slice(0, 3).concat({ to: '/settings', label: 'Settings', icon: Settings, match: (p) => p === '/settings' })
   return (
-    <nav className="grid grid-cols-4 border-t border-black/10 bg-[#F2F2F2] pb-[env(safe-area-inset-bottom)] md:hidden">
+    <nav className="grid grid-cols-4 bg-[#F2F2F2]/85 pb-[max(env(safe-area-inset-bottom),6px)] backdrop-blur-xl md:hidden">
       {tabs.map(({ to, label, icon: Icon, match }) => {
         const active = match(path)
         return (
@@ -255,11 +255,14 @@ export function TabBar({ path }) {
             key={to}
             href={href(to)}
             aria-current={active ? 'page' : undefined}
-            className={`flex flex-col items-center gap-1 py-2.5 text-[9px] font-bold uppercase tracking-widest ${
+            className={`relative flex flex-col items-center gap-1 pt-2 pb-1.5 text-[9px] font-bold uppercase tracking-widest transition-colors ${
               active ? 'text-[#111]' : 'text-neutral-400'
             }`}
           >
-            <Icon size={20} strokeWidth={active ? 1.75 : 1.25} />
+            {active && (
+              <motion.span layoutId="tab-dot" className="absolute top-0 h-[3px] w-6 rounded-b-full bg-[#111]" />
+            )}
+            <Icon size={22} strokeWidth={active ? 1.75 : 1.25} />
             {label}
           </a>
         )

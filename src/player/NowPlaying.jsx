@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { AnimatePresence, motion, Reorder } from 'framer-motion'
+import { AnimatePresence, motion, Reorder, useDragControls } from 'framer-motion'
 import {
   ChevronDown,
   Expand,
@@ -31,7 +31,7 @@ import Menu from '../components/Menu'
 import ScallopedPlayer from '../components/ScallopedPlayer'
 import Scrubber from '../components/Scrubber'
 import Artwork from '../components/Artwork'
-import { TrackMenu } from '../components/TrackRow'
+import { LikeButton, TrackMenu } from '../components/TrackRow'
 import { Eyebrow, IconButton, Spinner } from '../components/ui'
 import { href } from '../lib/router'
 import { formatTime } from '../lib/tracks'
@@ -61,9 +61,15 @@ export default function NowPlaying({ docked }) {
   // Cover the engine with artwork whenever it has nothing clean to show:
   // audio-only streams, and YouTube while paused (its pause screen has UI).
   const showVeil =
-    !track ||
-    (player.engine === 'stream' && !player.hasVideo) ||
-    (!player.playing && (player.engine === 'youtube' || viewMode === 'art'))
+    !player.needsTap &&
+    (!track ||
+      !!player.ad ||
+      (player.engine === 'stream' && !player.hasVideo) ||
+      (!player.playing && (player.engine === 'youtube' || viewMode === 'art')))
+
+  // Phone sheet: drag the top area (or the artwork) down to dismiss.
+  const drag = useDragControls()
+  const startDrag = (e) => !docked && drag.start(e)
 
   return (
     <motion.aside
@@ -72,32 +78,50 @@ export default function NowPlaying({ docked }) {
       inert={!visible}
       initial={false}
       animate={docked ? { x: visible ? 0 : '100%' } : { y: visible ? 0 : '100%' }}
-      transition={{ type: 'spring', damping: 32, stiffness: 300 }}
+      transition={{ type: 'spring', damping: 34, stiffness: 320 }}
+      drag={docked ? false : 'y'}
+      dragControls={drag}
+      dragListener={false}
+      dragConstraints={{ top: 0, bottom: 0 }}
+      dragElastic={{ top: 0, bottom: 0.7 }}
+      onDragEnd={(_, info) => (info.offset.y > 110 || info.velocity.y > 600) && onClose()}
       className={
         docked
           ? 'no-scrollbar relative h-full min-h-0 overflow-x-hidden overflow-y-auto border-l border-black/10 bg-[#F2F2F2] xl:col-start-3 xl:row-start-1'
-          : 'no-scrollbar fixed inset-0 z-50 overflow-y-auto bg-[#F2F2F2]'
+          : 'no-scrollbar fixed inset-0 z-50 overflow-x-hidden overflow-y-auto overscroll-contain bg-[#F2F2F2]'
       }
     >
       <div className="mx-auto flex min-h-full max-w-[480px] flex-col">
-        <header className="grid grid-cols-[44px_1fr_44px] items-center px-4 pt-[max(env(safe-area-inset-top),16px)]">
+        <header
+          onPointerDown={startDrag}
+          className={`grid grid-cols-[44px_1fr_44px] items-center px-4 ${
+            docked ? 'pt-4' : 'touch-none pt-[max(env(safe-area-inset-top),10px)]'
+          }`}
+        >
+          {!docked && <span aria-hidden className="col-span-3 mx-auto mb-1 h-1.5 w-10 rounded-full bg-black/15" />}
           <div>{!docked && <IconButton icon={ChevronDown} label="Close player" onClick={onClose} />}</div>
-          <h2 className="text-center text-[11px] font-semibold uppercase tracking-widest">Current Track</h2>
+          <div className="text-center">
+            <h2 className="text-[11px] font-semibold uppercase tracking-widest">{docked ? 'Current Track' : 'Now Playing'}</h2>
+            {!docked && <Timestamps inline />}
+          </div>
           <div>
-            {track && (
-              <IconButton
-                icon={Heart}
-                label={liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
-                fill={liked ? 'currentColor' : 'none'}
-                onClick={() => toggleLike(track)}
-                dot={false}
-              />
-            )}
+            {track &&
+              (docked ? (
+                <IconButton
+                  icon={Heart}
+                  label={liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
+                  fill={liked ? 'currentColor' : 'none'}
+                  onClick={() => toggleLike(track)}
+                  dot={false}
+                />
+              ) : (
+                <TrackMenu track={track} />
+              ))}
           </div>
         </header>
 
         <main className="flex flex-col items-center px-6">
-          <Timestamps />
+          {docked ? <Timestamps /> : null}
 
           <ScallopedPlayer
             ref={stageRef}
@@ -106,26 +130,40 @@ export default function NowPlaying({ docked }) {
             playing={player.playing}
             mode={viewMode}
             showVeil={showVeil}
-            className={`mt-6 ${
-              viewMode === 'video' ? 'w-full' : docked ? 'w-[min(280px,80%)]' : 'w-[min(300px,76vw)]'
+            interactive={player.needsTap}
+            onPointerDown={startDrag}
+            className={`${docked ? 'mt-6' : 'mt-8'} ${
+              viewMode === 'video' ? 'w-full' : docked ? 'w-[min(280px,80%)]' : 'w-[min(86vw,380px)]'
             }`}
           />
 
-          <div className="mt-3 flex h-8 items-center">
-            <AdChip />
-          </div>
+          {player.needsTap && (
+            <p className="mt-4 rounded-full bg-[#111] px-4 py-2 text-center text-[11px] font-semibold text-white">
+              Tap the video once to start — iPhone needs a tap for this song
+            </p>
+          )}
 
-          <Toolbar stageRef={stageRef} />
-
-          <StatusLine />
-
-          <TrackInfo track={track} docked={docked} />
-
-          <Scrubber onSeek={player.seek} disabled={!track} showTimes={false} className="mt-6 w-full max-w-[340px]" />
-
-          <Controls />
-
-          <VolumeControl />
+          {docked ? (
+            <>
+              <div className="mt-3 flex h-8 items-center">
+                <AdChip />
+              </div>
+              <Toolbar stageRef={stageRef} />
+              <StatusLine />
+              <TrackInfo track={track} docked={docked} />
+              <Scrubber onSeek={player.seek} disabled={!track} showTimes={false} className="mt-6 w-full max-w-[340px]" />
+              <Controls />
+              <VolumeControl />
+            </>
+          ) : (
+            <>
+              <MobileTrackInfo track={track} />
+              <Scrubber onSeek={player.seek} disabled={!track || !!player.ad} className="mt-5 w-full" />
+              <Controls mobile />
+              <StatusLine />
+              <Toolbar stageRef={stageRef} mobile />
+            </>
+          )}
         </main>
 
         <Lyrics track={track} />
@@ -135,8 +173,40 @@ export default function NowPlaying({ docked }) {
   )
 }
 
+/** Phone: big left-aligned title, artist link, like button — Apple Music style. */
+function MobileTrackInfo({ track }) {
+  const { ad } = usePlayerTime()
+  return (
+    <div className="mt-8 flex w-full items-end justify-between gap-3">
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={track?.id ?? 'empty'}
+          className="min-w-0"
+          initial={{ opacity: 0, x: 12 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -12 }}
+          transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+        >
+          <h3 className="line-clamp-2 text-[26px] leading-[1.02] font-black tracking-[-0.03em]">{track?.title ?? 'Nothing playing'}</h3>
+          {track ? (
+            <a
+              href={href(`/artist/${encodeURIComponent(track.artist)}`)}
+              className="mt-1 block truncate font-serif text-[19px] text-neutral-500 italic"
+            >
+              {ad ? 'Please wait…' : track.artist}
+            </a>
+          ) : (
+            <p className="mt-1 font-serif text-[19px] text-neutral-500 italic">Search for a song to begin</p>
+          )}
+        </motion.div>
+      </AnimatePresence>
+      {track && <LikeButton track={track} size={22} alwaysVisible />}
+    </div>
+  )
+}
+
 /** Art / Video switch, fullscreen, lyrics, and pop-out mini player. */
-function Toolbar({ stageRef }) {
+function Toolbar({ stageRef, mobile }) {
   const { viewMode, setViewMode, setLyricsOpen } = useUi()
   const mini = useMiniWindow()
   const p = usePlayer()
@@ -149,10 +219,28 @@ function Toolbar({ stageRef }) {
   }
 
   return (
-    <div className="mt-2 flex flex-wrap items-center justify-center gap-1 rounded-[28px] border border-black/10 p-1">
-      <Segment active={viewMode === 'art'} onClick={() => setViewMode('art')} icon={Flower2} label="Art" />
-      <Segment active={viewMode === 'video'} onClick={() => setViewMode('video')} icon={MonitorPlay} label="Video" />
-      <span className="mx-1 h-5 w-px bg-black/10" />
+    <div
+      className={
+        mobile
+          ? 'mt-6 mb-2 flex w-full items-center justify-between rounded-full bg-black/[0.04] px-2 py-1'
+          : 'mt-2 flex flex-wrap items-center justify-center gap-1 rounded-[28px] border border-black/10 p-1'
+      }
+    >
+      {mobile ? (
+        <IconButton
+          icon={viewMode === 'video' ? Flower2 : MonitorPlay}
+          label={viewMode === 'video' ? 'Show artwork' : 'Show video'}
+          onClick={() => setViewMode(viewMode === 'video' ? 'art' : 'video')}
+          size={18}
+          className="h-10 w-10"
+        />
+      ) : (
+        <>
+          <Segment active={viewMode === 'art'} onClick={() => setViewMode('art')} icon={Flower2} label="Art" />
+          <Segment active={viewMode === 'video'} onClick={() => setViewMode('video')} icon={MonitorPlay} label="Video" />
+          <span className="mx-1 h-5 w-px bg-black/10" />
+        </>
+      )}
       {viewMode === 'video' && (
         <IconButton icon={Expand} label="Full screen" onClick={fullscreen} size={16} className="h-9 w-9" disabled={!p.current} />
       )}
@@ -160,19 +248,21 @@ function Toolbar({ stageRef }) {
         icon={MicVocal}
         label="Lyrics"
         onClick={() => setLyricsOpen(true)}
-        size={16}
-        className="h-9 w-9"
+        size={mobile ? 18 : 16}
+        className={mobile ? 'h-10 w-10' : 'h-9 w-9'}
         disabled={!p.current}
       />
-      <IconButton
-        icon={PictureInPicture2}
-        label={mini.isOpen ? 'Close mini player' : 'Pop-out mini player'}
-        active={mini.isOpen}
-        onClick={mini.isOpen ? mini.close : mini.open}
-        size={16}
-        className="h-9 w-9"
-        disabled={!p.current}
-      />
+      {!mobile && (
+        <IconButton
+          icon={PictureInPicture2}
+          label={mini.isOpen ? 'Close mini player' : 'Pop-out mini player'}
+          active={mini.isOpen}
+          onClick={mini.isOpen ? mini.close : mini.open}
+          size={16}
+          className="h-9 w-9"
+          disabled={!p.current}
+        />
+      )}
       <Menu
         icon={Radio}
         label="Radio"
@@ -222,11 +312,15 @@ function Segment({ active, onClick, icon: Icon, label }) {
   )
 }
 
-function Timestamps() {
-  const { time, duration } = usePlayerTime()
+function Timestamps({ inline }) {
+  const { time, duration, ad } = usePlayerTime()
+  if (inline)
+    return (
+      <p className="mt-0.5 truncate text-[10px] font-medium text-neutral-400">{ad ? 'Please wait…' : 'Mono Music'}</p>
+    )
   return (
     <Eyebrow className="mt-6 tabular-nums">
-      {formatTime(time)} / {formatTime(duration)}
+      {ad ? 'Please wait…' : `${formatTime(time)} / ${formatTime(duration)}`}
     </Eyebrow>
   )
 }
@@ -270,11 +364,11 @@ function TrackInfo({ track, docked }) {
   )
 }
 
-function Controls() {
+function Controls({ mobile }) {
   const p = usePlayer()
   const disabled = !p.current
   return (
-    <div className="mt-6 flex w-full max-w-[340px] items-center justify-between">
+    <div className={`flex w-full items-center justify-between ${mobile ? 'mt-3 px-1' : 'mt-6 max-w-[340px]'}`}>
       <IconButton icon={Shuffle} label="Shuffle" active={p.shuffle} onClick={p.toggleShuffle} size={18} />
       <IconButton icon={SkipBack} label="Previous" onClick={p.prev} size={22} disabled={disabled} />
       <PlayButton size="lg" />
@@ -297,10 +391,10 @@ export function PlayButton({ size = 'lg', tone = 'dark' }) {
   return (
     <motion.button
       type="button"
-      aria-label={p.playing ? 'Pause' : 'Play'}
-      title={p.playing ? 'Pause (Space)' : 'Play (Space)'}
+      aria-label={p.loading ? 'Loading' : p.playing ? 'Pause' : 'Play'}
+      title={p.loading ? 'Please wait…' : p.playing ? 'Pause (Space)' : 'Play (Space)'}
       onClick={p.toggle}
-      disabled={!p.current || p.status !== 'ready'}
+      disabled={!p.current || p.status !== 'ready' || !!p.ad}
       whileTap={{ scale: 0.92 }}
       className={`grid shrink-0 place-items-center rounded-full disabled:opacity-40 ${colors} ${
         lg ? 'h-[76px] w-[76px] shadow-[0_12px_30px_-10px_rgba(0,0,0,0.6)]' : 'h-11 w-11'
@@ -308,14 +402,19 @@ export function PlayButton({ size = 'lg', tone = 'dark' }) {
     >
       <AnimatePresence mode="wait" initial={false}>
         <motion.span
-          key={p.playing ? 'pause' : 'play'}
+          key={p.loading ? 'load' : p.playing ? 'pause' : 'play'}
           initial={{ opacity: 0, scale: 0.6 }}
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.6 }}
           transition={{ duration: 0.12 }}
           className="grid place-items-center"
         >
-          {p.playing ? (
+          {p.loading ? (
+            <span
+              aria-label="Loading"
+              className={`animate-spin rounded-full border-2 border-current border-t-transparent ${lg ? 'h-7 w-7' : 'h-4 w-4'}`}
+            />
+          ) : p.playing ? (
             <Pause size={lg ? 26 : 18} strokeWidth={1.25} fill="currentColor" />
           ) : (
             <Play size={lg ? 26 : 18} strokeWidth={1.25} fill="currentColor" className="translate-x-[1px]" />

@@ -22,7 +22,7 @@ const BREATH = { duration: 7, ease: 'easeInOut', repeat: Infinity, repeatType: '
  * (paused YouTube, audio-only stream), the track's artwork covers it.
  */
 const ScallopedPlayer = forwardRef(function ScallopedPlayer(
-  { mountRef, track, playing, mode = 'art', showVeil, className = '' },
+  { mountRef, track, playing, mode = 'art', showVeil, interactive = false, onPointerDown, className = '' },
   ref,
 ) {
   const reduceMotion = useReducedMotion()
@@ -33,7 +33,8 @@ const ScallopedPlayer = forwardRef(function ScallopedPlayer(
     <motion.div
       ref={ref}
       layout
-      className={`relative ${video ? 'aspect-video' : 'aspect-square'} ${className}`}
+      onPointerDown={interactive ? undefined : onPointerDown}
+      className={`relative ${interactive ? '' : 'touch-none'} ${video ? 'aspect-video' : 'aspect-square'} ${className}`}
       animate={breathe ? { scale: [1, 1.025], rotate: [-1.5, 1.5] } : { scale: 1, rotate: 0 }}
       transition={breathe ? BREATH : { duration: 0.4 }}
     >
@@ -55,7 +56,7 @@ const ScallopedPlayer = forwardRef(function ScallopedPlayer(
           {/* Engine mount point — managed by PlayerProvider. */}
           <div
             ref={mountRef}
-            className={`pointer-events-none absolute ${
+            className={`${interactive ? 'pointer-events-auto' : 'pointer-events-none'} absolute ${
               video
                 ? 'inset-0 [&_video]:object-contain'
                 : 'top-1/2 left-1/2 aspect-video h-[135%] -translate-x-1/2 -translate-y-1/2 [&_video]:object-cover'
@@ -65,7 +66,7 @@ const ScallopedPlayer = forwardRef(function ScallopedPlayer(
           {/* Artwork veil. */}
           <motion.div
             aria-hidden
-            className="absolute inset-0 bg-[#111]"
+            className="pointer-events-none absolute inset-0 bg-[#111]"
             initial={false}
             animate={{ opacity: showVeil ? 1 : 0 }}
             transition={{ duration: showVeil ? 0.3 : 0.9 }}

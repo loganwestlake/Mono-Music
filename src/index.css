@@ -13,6 +13,41 @@ body,
   height: 100%;
 }
 
+/* ── iOS / mobile hygiene ─────────────────────────────────────────────
+   No sideways overflow (which makes iOS zoom the page out/in), no font
+   inflation on rotate, no double-tap zoom delay, no grey tap flash. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+html,
+body {
+  overflow-x: hidden;
+  width: 100%;
+}
+button,
+a,
+[role='button'],
+input[type='range'] {
+  touch-action: manipulation;
+}
+button,
+[role='button'] {
+  -webkit-user-select: none;
+  user-select: none;
+}
+img {
+  -webkit-touch-callout: none;
+}
+/* iOS zooms into any text field under 16px — keep them at 16px on phones. */
+@media (max-width: 767px) {
+  input:not([type='range']):not([type='checkbox']):not([type='file']),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
 body {
   overscroll-behavior: none;
   @apply bg-paper text-ink font-sans antialiased;
@@ -99,7 +134,7 @@ body {
 body::after {
   content: '';
   position: fixed;
-  inset: -50%;
+  inset: 0;
   z-index: 100;
   pointer-events: none;
   opacity: 0.035;

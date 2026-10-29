@@ -7,6 +7,19 @@ import { isUnresolved, parseVideoTitle, shuffled, thumbUrl } from '../lib/tracks
 import { useLibrary } from '../store/library'
 import { useResolver } from '../store/resolver'
 import { useToast } from '../store/toast'
+import { useUi } from '../store/ui'
+
+// Touch devices (phones/tablets) stream audio-only by default: lighter, and
+// it keeps playing with the screen locked. iOS also needs a media element to
+// be "unlocked" by a tap before it may start sound on its own.
+const IS_TOUCH = typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches
+const IS_IOS =
+  typeof navigator !== 'undefined' &&
+  (/iP(hone|od|ad)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1))
+
+// 0.1s of silence, used to unlock media elements on the first tap (iOS).
+const SILENCE =
+  'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA='
 
 /**
  * The single, app-wide player plus queue.
@@ -40,6 +53,8 @@ export function PlayerProvider({ children }) {
   const { resolve } = useResolver()
   const toast = useToast()
   const { adFree, autoplay, muteAds, notifications } = library.settings
+  const { viewMode } = useUi()
+  const preferAudio = IS_TOUCH && viewMode !== 'video'
   const [saved] = useState(() => load('player', SAVED_DEFAULTS))
 
   const [queue, setQueue] = useState(saved.queue)
@@ -62,10 +77,14 @@ export function PlayerProvider({ children }) {
   const [time, setTime] = useState(saved.time || 0)
   const [duration, setDuration] = useState(0)
   const [ad, setAd] = useState(null) // { remaining, elapsed } while a YouTube ad plays
+  const [needsTap, setNeedsTap] = useState(false) // iOS: YouTube wants a tap inside its player
   const [mountEl, setMountEl] = useState(null)
 
   const ytRef = useRef(null)
   const videoRef = useRef(null)
+  const audioRef = useRef(null)
+  const mediaKindRef = useRef('video') // which element the stream engine is using
+  const adRetriedRef = useRef(null)
   const ytHostRef = useRef(null)
   const engineRef = useRef(engine)
   const wantPlayRef = useRef(false) // start playing as soon as the current track loads
@@ -102,35 +121,42 @@ export function PlayerProvider({ children }) {
   const eng = useMemo(
     () => ({
       isStream: () => engineRef.current === 'stream',
+      media: () => (mediaKindRef.current === 'audio' ? audioRef.current : videoRef.current),
       play() {
-        if (this.isStream()) videoRef.current?.play().catch(() => setPlaying(false))
+        if (this.isStream()) this.media()?.play().catch(() => setPlaying(false))
         else ytRef.current?.playVideo?.()
       },
       pause() {
-        if (this.isStream()) videoRef.current?.pause()
+        if (this.isStream()) this.media()?.pause()
         else ytRef.current?.pauseVideo?.()
       },
       seek(s) {
         if (this.isStream()) {
-          if (videoRef.current) videoRef.current.currentTime = s
+          const m = this.media()
+          if (m) m.currentTime = s
         } else ytRef.current?.seekTo?.(s, true)
       },
       time() {
-        return (this.isStream() ? videoRef.current?.currentTime : ytRef.current?.getCurrentTime?.()) || 0
+        return (this.isStream() ? this.media()?.currentTime : ytRef.current?.getCurrentTime?.()) || 0
       },
       duration() {
-        const d = this.isStream() ? videoRef.current?.duration : ytRef.current?.getDuration?.()
+        const d = this.isStream() ? this.media()?.duration : ytRef.current?.getDuration?.()
         return Number.isFinite(d) ? d : 0
       },
+      /** Silence whatever isn't the active source. */
       stopInactive() {
-        if (this.isStream()) ytRef.current?.stopVideo?.()
-        else {
-          const v = videoRef.current
-          if (v) {
-            v.pause()
-            v.removeAttribute('src')
-            v.load()
-          }
+        const clear = (m) => {
+          if (!m || !m.getAttribute('src') || m.getAttribute('src') === SILENCE) return
+          m.pause()
+          m.removeAttribute('src')
+          m.load()
+        }
+        if (this.isStream()) {
+          ytRef.current?.stopVideo?.()
+          clear(mediaKindRef.current === 'audio' ? videoRef.current : audioRef.current)
+        } else {
+          clear(videoRef.current)
+          clear(audioRef.current)
         }
       },
     }),
@@ -265,6 +291,12 @@ export function PlayerProvider({ children }) {
         adMutedRef.current = true
         yt.mute?.()
       }
+      // Quietly look for an ad-free copy once per song; the listener just
+      // sees "please wait" and a spinner meanwhile.
+      if (adFree && adRetriedRef.current !== track.id) {
+        adRetriedRef.current = track.id
+        handlers.current.escapeAd?.()
+      }
     } else if (adRef.current) {
       setAd(null)
       if (adMutedRef.current) {
@@ -288,30 +320,68 @@ export function PlayerProvider({ children }) {
     const video = document.createElement('video')
     video.className = 'absolute inset-0 h-full w-full bg-[#111]'
     video.playsInline = true
+    video.setAttribute('playsinline', '')
+    video.setAttribute('webkit-playsinline', '')
     video.preload = 'auto'
     video.volume = volumeRef.current / 100
 
-    mountEl.replaceChildren(ytHost, video)
+    // Audio-only streams play through <audio>: iOS keeps it going when locked.
+    const audio = document.createElement('audio')
+    audio.preload = 'auto'
+    audio.volume = volumeRef.current / 100
+
+    mountEl.replaceChildren(ytHost, video, audio)
     ytHostRef.current = ytHost
     videoRef.current = video
+    audioRef.current = audio
 
-    const on = (name, fn) => video.addEventListener(name, fn)
-    const ifStream = (fn) => () => engineRef.current === 'stream' && fn()
-    on('playing', ifStream(() => handlers.current.playing()))
-    on('pause', ifStream(() => !video.ended && handlers.current.paused()))
-    on('waiting', ifStream(() => setBuffering(true)))
-    on('ended', ifStream(() => handlers.current.ended()))
-    on(
-      'loadedmetadata',
-      ifStream(() => {
-        setDuration(video.duration || 0)
-        setHasVideo(video.videoWidth > 0)
-        video.playbackRate = rateRef.current
-        if (pendingSeekRef.current) video.currentTime = pendingSeekRef.current
-        pendingSeekRef.current = 0
-      }),
-    )
-    on('error', ifStream(() => video.getAttribute('src') && handlers.current.streamFailed()))
+    const wire = (el, kind) => {
+      const on = (name, fn) => el.addEventListener(name, fn)
+      // Ignore events from the silent clip used to unlock playback on iOS.
+      const active = () => {
+        const src = el.getAttribute('src')
+        return engineRef.current === 'stream' && mediaKindRef.current === kind && !!src && src !== SILENCE
+      }
+      const when = (fn) => () => active() && fn()
+      on('playing', when(() => handlers.current.playing()))
+      on('pause', when(() => !el.ended && handlers.current.paused()))
+      on('waiting', when(() => setBuffering(true)))
+      on('ended', when(() => handlers.current.ended()))
+      on(
+        'loadedmetadata',
+        when(() => {
+          setDuration(el.duration || 0)
+          setHasVideo(kind === 'video' && el.videoWidth > 0)
+          el.playbackRate = rateRef.current
+          if (pendingSeekRef.current) el.currentTime = pendingSeekRef.current
+          pendingSeekRef.current = 0
+        }),
+      )
+      on('error', when(() => el.getAttribute('src') && handlers.current.streamFailed()))
+    }
+    wire(video, 'video')
+    wire(audio, 'audio')
+
+    // iOS: a media element may only start sound on its own after it has
+    // played once inside a tap. Prime both elements on the first taps.
+    const unlock = () => {
+      for (const el of [video, audio]) {
+        if (el.dataset.unlocked || (el.getAttribute('src') && el.getAttribute('src') !== SILENCE)) continue
+        el.src = SILENCE
+        el.play()
+          .then(() => {
+            el.dataset.unlocked = '1'
+            if (el.getAttribute('src') === SILENCE) el.pause()
+          })
+          .catch(() => {})
+      }
+      if (video.dataset.unlocked && audio.dataset.unlocked) {
+        window.removeEventListener('touchend', unlock, true)
+        window.removeEventListener('click', unlock, true)
+      }
+    }
+    window.addEventListener('touchend', unlock, true)
+    window.addEventListener('click', unlock, true)
 
     setYtStatus('loading')
     loadYouTubeApi()
@@ -336,12 +406,17 @@ export function PlayerProvider({ children }) {
 
     return () => {
       cancelled = true
-      video.pause()
-      video.removeAttribute('src')
-      video.load()
+      window.removeEventListener('touchend', unlock, true)
+      window.removeEventListener('click', unlock, true)
+      for (const el of [video, audio]) {
+        el.pause()
+        el.removeAttribute('src')
+        el.load()
+      }
       ytRef.current?.destroy?.()
       ytRef.current = null
       videoRef.current = null
+      audioRef.current = null
       loadedKeyRef.current = null
       setYtStatus('idle')
     }
@@ -366,8 +441,20 @@ export function PlayerProvider({ children }) {
     }
     pendingYtRef.current = null
     const id = currentRef.current.id
-    if (wantPlayRef.current) yt.loadVideoById({ videoId: id, startSeconds: start })
-    else yt.cueVideoById({ videoId: id, startSeconds: start })
+    setNeedsTap(false)
+    if (wantPlayRef.current) {
+      yt.loadVideoById({ videoId: id, startSeconds: start })
+      // iOS won't let YouTube start without a tap inside its own player.
+      if (IS_IOS) {
+        const token = tokenRef.current
+        setTimeout(() => {
+          if (token === tokenRef.current && engineRef.current === 'youtube' && !playingRef.current) {
+            setBuffering(false)
+            setNeedsTap(true)
+          }
+        }, 2500)
+      }
+    } else yt.cueVideoById({ videoId: id, startSeconds: start })
     yt.setPlaybackRate?.(rateRef.current)
   }
 
@@ -377,7 +464,6 @@ export function PlayerProvider({ children }) {
   }
 
   function fallbackToYouTube(start) {
-    toast('No ad-free copy found for this song — using YouTube (ads are muted).')
     loadYouTube(start)
   }
 
@@ -387,14 +473,17 @@ export function PlayerProvider({ children }) {
     switchEngine('stream')
     eng.stopInactive()
     setBuffering(wantPlayRef.current)
-    resolveStream(track.id, { exclude: triedRef.current })
+    resolveStream(track.id, { exclude: triedRef.current, preferAudio })
       .then((src) => {
         if (token !== tokenRef.current) return
-        const v = videoRef.current
+        mediaKindRef.current = src.hasVideo ? 'video' : 'audio'
+        eng.stopInactive()
+        const v = eng.media()
         if (!v) return
         triedRef.current.push(src.base)
         streamMetaRef.current = src.meta
         setHasVideo(src.hasVideo)
+        setNeedsTap(false)
         pendingSeekRef.current = start
         v.src = src.url
         if (wantPlayRef.current) {
@@ -431,7 +520,7 @@ export function PlayerProvider({ children }) {
     }
 
     const mode = adFree ? 'stream' : 'youtube'
-    const key = `${current.id}|${mode}`
+    const key = `${current.id}|${mode}${mode === 'stream' && preferAudio ? '-a' : ''}`
     if (loadedKeyRef.current === key) return
 
     const sameTrack = loadedKeyRef.current?.startsWith(`${current.id}|`)
@@ -443,13 +532,14 @@ export function PlayerProvider({ children }) {
 
     setError(null)
     setAd(null)
+    setNeedsTap(false)
     setTime(start)
     setDuration(current.duration || 0)
     setPlaying(false)
 
     if (mode === 'youtube') return loadYouTube(start)
     loadStream(start)
-  }, [mountEl, current, adFree]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mountEl, current, adFree, preferAudio]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // A YouTube load that was waiting for the API.
   useEffect(() => {
@@ -465,10 +555,10 @@ export function PlayerProvider({ children }) {
     const id = setTimeout(async () => {
       const vid = isUnresolved(upcoming) ? await resolve(upcoming) : upcoming.id
       if (vid && vid !== upcoming.id) setQueue((q) => q.map((t) => (t.id === upcoming.id ? { ...t, id: vid } : t)))
-      if (vid && adFree) prefetchStream(vid)
+      if (vid && adFree) prefetchStream(vid, { preferAudio })
     }, 4000)
     return () => clearTimeout(id)
-  }, [playing, upcoming, adFree, resolve])
+  }, [playing, upcoming, adFree, preferAudio, resolve])
 
   /* ── Clock, ads, sleep timer, listening time ──────────────────────── */
   const sleepRef = useRef(sleep)
@@ -602,7 +692,7 @@ export function PlayerProvider({ children }) {
   )
 
   const toggle = useCallback(() => {
-    if (!current) return
+    if (!current || adRef.current) return
     if (playing) eng.pause()
     else {
       wantPlayRef.current = true
@@ -639,9 +729,10 @@ export function PlayerProvider({ children }) {
   const setVolume = useCallback((v) => {
     setVolumeState(v)
     setMuted(v === 0)
-    if (videoRef.current) {
-      videoRef.current.volume = v / 100
-      videoRef.current.muted = v === 0
+    for (const m of [videoRef.current, audioRef.current]) {
+      if (!m) continue
+      m.volume = v / 100
+      m.muted = v === 0
     }
     ytRef.current?.setVolume?.(v)
     if (v > 0 && !adMutedRef.current) ytRef.current?.unMute?.()
@@ -649,7 +740,7 @@ export function PlayerProvider({ children }) {
 
   const toggleMute = useCallback(() => {
     const nextMuted = !muted
-    if (videoRef.current) videoRef.current.muted = nextMuted
+    for (const m of [videoRef.current, audioRef.current]) if (m) m.muted = nextMuted
     if (nextMuted) ytRef.current?.mute?.()
     else if (!adMutedRef.current) ytRef.current?.unMute?.()
     setMuted(nextMuted)
@@ -658,7 +749,7 @@ export function PlayerProvider({ children }) {
 
   const setRate = useCallback((r) => {
     setRateState(r)
-    if (videoRef.current) videoRef.current.playbackRate = r
+    for (const m of [videoRef.current, audioRef.current]) if (m) m.playbackRate = r
     ytRef.current?.setPlaybackRate?.(r)
   }, [])
 
@@ -678,26 +769,24 @@ export function PlayerProvider({ children }) {
     [toast],
   )
 
-  /** Try to get past a YouTube ad by switching this song to an ad-free source. */
-  const skipAd = useCallback(() => {
+  /** Try to get past a YouTube ad by switching this song to an ad-free source (silently). */
+  handlers.current.escapeAd = () => {
     const track = currentRef.current
     if (!track) return
-    const at = 0
-    toast('Looking for an ad-free copy…')
-    triedRef.current = []
-    tokenRef.current++
     const token = tokenRef.current
-    resolveStream(track.id, { exclude: [] })
+    resolveStream(track.id, { exclude: [], preferAudio })
       .then(() => {
-        if (token !== tokenRef.current) return
+        if (token !== tokenRef.current || currentRef.current?.id !== track.id) return
         setAd(null)
         adMutedRef.current = false
         ytRef.current?.unMute?.()
-        loadedKeyRef.current = `${track.id}|stream`
-        loadStream(at)
+        triedRef.current = []
+        loadedKeyRef.current = `${track.id}|stream${preferAudio ? '-a' : ''}`
+        tokenRef.current++
+        loadStream(0)
       })
-      .catch(() => token === tokenRef.current && toast('No ad-free copy available — the ad will end shortly.'))
-  }, [toast]) // eslint-disable-line react-hooks/exhaustive-deps
+      .catch(() => {})
+  }
 
   const jump = useCallback((i) => {
     wantPlayRef.current = true
@@ -809,7 +898,8 @@ export function PlayerProvider({ children }) {
       toggleMute,
       setRate,
       setSleep,
-      skipAd,
+      needsTap,
+      loading: !!ad || resolving || (buffering && wantPlayRef.current),
       jump,
       removeAt,
       setUpcoming,
@@ -820,7 +910,7 @@ export function PlayerProvider({ children }) {
     }),
     [engine, hasVideo, status, error, resolving, queue, index, current, playing, buffering, shuffle, repeat, volume,
       muted, rate, sleep, playTracks, playTrack, playNext, enqueue, startRadio, toggle, next, prev, seek, getTime,
-      setVolume, toggleMute, setRate, setSleep, skipAd, jump, removeAt, setUpcoming, clearUpcoming, toggleShuffle,
+      setVolume, toggleMute, setRate, setSleep, needsTap, ad, jump, removeAt, setUpcoming, clearUpcoming, toggleShuffle,
       cycleRepeat, videoPictureInPicture],
   )
 
