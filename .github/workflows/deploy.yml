@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
   pages: write
   id-token: write
@@ -37,5 +38,21 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # While Settings → Pages → Source is still "Deploy from a branch",
+      # GitHub also publishes the raw (unbuilt) source on every push, which
+      # renders a blank page. Let that finish first so this deploy wins.
+      - name: Wait for branch-based Pages build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          type=$(gh api "repos/$GITHUB_REPOSITORY/pages" --jq .build_type || echo unknown)
+          [ "$type" = "legacy" ] || exit 0
+          echo "::warning::Pages source is 'Deploy from a branch'. Set Settings → Pages → Source to 'GitHub Actions' to skip this wait."
+          for i in $(seq 60); do
+            pending=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$GITHUB_SHA" \
+              --jq '[.workflow_runs[] | select(.path == "dynamic/pages/pages-build-deployment" and .status != "completed")] | length')
+            [ "$pending" = 0 ] && exit 0
+            sleep 10
+          done
       - id: deployment
         uses: actions/deploy-pages@v4
