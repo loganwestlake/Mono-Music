@@ -32,12 +32,13 @@ const INITIAL = {
   settings: DEFAULT_SETTINGS,
 }
 
-const strip = ({ id, title, artist, duration, cover }) => ({
+const strip = ({ id, title, artist, duration, cover, qid }) => ({
   id,
   title,
   artist,
   duration: duration || 0,
   ...(cover ? { cover } : {}),
+  ...(qid ? { qid } : {}), // the song's original identity (imports), so it can be re-matched
 })
 const uid = () => Math.random().toString(36).slice(2, 10)
 const today = () => new Date().toISOString().slice(0, 10)
@@ -151,7 +152,11 @@ function reducer(state, action) {
       }
     case 'resolveTrack':
       // An imported/recommended song was matched to a YouTube video.
-      return mapTracks(state, (t) => (t.id === action.from ? { ...t, id: action.to, duration: t.duration || action.duration || 0 } : t))
+      return mapTracks(state, (t) =>
+        t.id === action.from
+          ? { ...t, id: action.to, duration: t.duration || action.duration || 0, qid: t.qid || action.qid }
+          : t,
+      )
     case 'applyRemote': {
       // Cloud data from another device; keep this device's private keys.
       const next = { ...state, ...action.patch }
@@ -225,7 +230,7 @@ export function LibraryProvider({ children }) {
       insertInPlaylist: (id, track, index) => dispatch({ type: 'insertInPlaylist', id, track, index }),
       removeFromPlaylist: (id, trackId) => dispatch({ type: 'removeFromPlaylist', id, trackId }),
       setPlaylistTracks: (id, tracks) => dispatch({ type: 'setPlaylistTracks', id, tracks }),
-      resolveTrack: (from, to, duration) => dispatch({ type: 'resolveTrack', from, to, duration }),
+      resolveTrack: (from, to, duration, qid) => dispatch({ type: 'resolveTrack', from, to, duration, qid }),
       replaceAll: (next) => dispatch({ type: 'replace', state: next }),
       applyRemote: (patch) => dispatch({ type: 'applyRemote', patch }),
       reset: () => dispatch({ type: 'reset' }),

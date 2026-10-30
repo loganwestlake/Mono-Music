@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { Heart, Link2, ListEnd, ListPlus, ListStart, MoreHorizontal, Radio, Share2, Trash2, User } from 'lucide-react'
+import { Heart, Link2, ListEnd, ListPlus, ListStart, MoreHorizontal, Radio, SearchCheck, Share2, Trash2, User } from 'lucide-react'
+import { useResolver } from '../store/resolver'
 import { usePlayer } from '../player/PlayerProvider'
 import { useLibrary } from '../store/library'
 import { useToast } from '../store/toast'
@@ -86,6 +87,7 @@ export function TrackMenu({ track, onRemove, className = '' }) {
   const player = usePlayer()
   const toast = useToast()
   const openAddToPlaylist = useAddToPlaylist()
+  const { rematch } = useResolver()
 
   const share = async () => {
     const url = youtubeUrl(track)
@@ -123,6 +125,11 @@ export function TrackMenu({ track, onRemove, className = '' }) {
             navigator.clipboard?.writeText(youtubeUrl(track))
             toast('Link copied')
           },
+        },
+        {
+          icon: SearchCheck,
+          label: 'Wrong song? Find the right one',
+          run: () => rematch([track], 'Finding the right song', { avoidCurrent: true }),
         },
         onRemove && 'divider',
         onRemove && { icon: Trash2, label: 'Remove from playlist', run: onRemove },

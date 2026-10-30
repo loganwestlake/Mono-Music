@@ -23,7 +23,7 @@ export default function PlaylistView({ kind, id }) {
   const library = useLibrary()
   const player = usePlayer()
   const toast = useToast()
-  const { resolveAll } = useResolver()
+  const { resolveAll, rematch } = useResolver()
   const [editing, setEditing] = useState(false)
   const [filter, setFilter] = useState('')
   const [sort, setSort] = useState('custom')
@@ -174,6 +174,7 @@ export default function PlaylistView({ kind, id }) {
                 { icon: CopyPlus, label: 'Duplicate', run: duplicate },
                 { icon: FileDown, label: 'Export CSV', run: exportCsv },
                 unmatched > 0 && { icon: Wand2, label: `Match ${unmatched} songs now`, run: () => resolveAll(tracks, `Matching “${title}”`) },
+                tracks.length > 0 && { icon: Wand2, label: 'Re-match all songs', hint: 'fix wrong songs', run: () => rematch(tracks, `Re-matching “${title}”`) },
                 kind === 'recent' && tracks.length > 0 && { icon: Trash2, label: 'Clear history', run: library.clearRecent },
                 kind === 'playlist' && 'divider',
                 kind === 'playlist' && { icon: Trash2, label: 'Delete playlist', run: remove },

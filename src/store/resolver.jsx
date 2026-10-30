@@ -1,8 +1,8 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { load, save } from '../lib/storage'
 import { matchTrack } from '../lib/search'
-import { isUnresolved } from '../lib/tracks'
+import { isUnresolved, unresolvedId } from '../lib/tracks'
 import { useLibrary } from './library'
 
 /**
@@ -14,7 +14,8 @@ import { useLibrary } from './library'
  */
 
 const Ctx = createContext(null)
-const memory = load('matches', { map: {} }).map
+// v2: the stricter matcher. Old (sometimes wrong) matches are discarded.
+const memory = load('matches-v2', { map: {} }).map
 
 export function ResolverProvider({ children }) {
   const library = useLibrary()
@@ -32,8 +33,8 @@ export function ResolverProvider({ children }) {
       .then((hit) => {
         if (!hit) return null
         memory[track.id] = { id: hit.id, duration: hit.duration }
-        save('matches', { map: memory })
-        libRef.current.resolveTrack(track.id, hit.id, hit.duration)
+        save('matches-v2', { map: memory })
+        libRef.current.resolveTrack(track.id, hit.id, hit.duration, track.id)
         return hit.id
       })
       .catch(() => null)
@@ -67,7 +68,63 @@ export function ResolverProvider({ children }) {
     [resolve],
   )
 
-  const value = useMemo(() => ({ resolve, resolveAll, job }), [resolve, resolveAll, job])
+  /**
+   * Re-match songs that may have been matched wrong (or not at all).
+   * Each track keeps its original title/artist/length from the import, so
+   * we can search again with the stricter matcher. A song with no good
+   * match goes back to "unmatched" instead of staying wrong.
+   */
+  const rematch = useCallback(async (tracks, label = 'Re-matching songs', { avoidCurrent = false } = {}) => {
+    const list = tracks.filter(Boolean)
+    if (!list.length) return
+    let done = 0
+    let failed = 0
+    setJob({ label, done, total: list.length, failed })
+    const queue = [...list]
+    const worker = async () => {
+      while (queue.length) {
+        const t = queue.shift()
+        const qid = t.qid || (isUnresolved(t) ? t.id : unresolvedId(t.artist, t.title))
+        const hit = await matchTrack(t, {
+          apiKey: libRef.current.settings.apiKey,
+          exclude: avoidCurrent && !isUnresolved(t) ? [t.id] : [],
+        }).catch(() => null)
+        if (hit) {
+          memory[qid] = { id: hit.id, duration: hit.duration }
+          if (hit.id !== t.id) libRef.current.resolveTrack(t.id, hit.id, hit.duration, qid)
+        } else {
+          failed++
+          delete memory[qid]
+          if (!isUnresolved(t)) libRef.current.resolveTrack(t.id, qid, 0, qid)
+        }
+        save('matches-v2', { map: memory })
+        done++
+        setJob({ label, done, total: list.length, failed })
+      }
+    }
+    await Promise.all([worker(), worker(), worker()])
+    setTimeout(() => setJob(null), 3000)
+    return { failed }
+  }, [])
+
+  // One-time repair: songs imported before the stricter matcher may be the
+  // wrong song. Re-check them once search works (relay or API key).
+  const canSearch = !!(library.settings.proxyUrl || library.settings.apiKey)
+  useEffect(() => {
+    if (!canSearch || localStorage.getItem('mono:rematch-v2') === 'done') return
+    const t = setTimeout(async () => {
+      const seen = new Set()
+      const suspect = libRef.current.playlists
+        .filter((p) => ['spotify', 'file', 'text'].includes(p.source))
+        .flatMap((p) => p.tracks)
+        .filter((t) => !t.qid && !isUnresolved(t) && !seen.has(t.id) && seen.add(t.id))
+      localStorage.setItem('mono:rematch-v2', 'done')
+      if (suspect.length) await rematch(suspect, 'Fixing song matches')
+    }, 4000)
+    return () => clearTimeout(t)
+  }, [canSearch, rematch])
+
+  const value = useMemo(() => ({ resolve, resolveAll, rematch, job }), [resolve, resolveAll, rematch, job])
 
   return (
     <Ctx.Provider value={value}>

@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { collection, deleteDoc, deleteField, doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore'
+import { collection, deleteDoc, doc, onSnapshot, setDoc } from 'firebase/firestore'
 import { db, onAuth, signInWithGoogle, signOut } from '../lib/firebase'
 import { PlayerContext, TimeContext, usePlayer } from '../player/PlayerProvider'
 import { useLibrary } from './library'
@@ -40,7 +40,8 @@ function stable(value) {
   return JSON.stringify(value ?? null)
 }
 
-const strip = (t) => t && { id: t.id, title: t.title, artist: t.artist, duration: t.duration || 0, ...(t.cover ? { cover: t.cover } : {}) }
+const strip = (t) =>
+  t && { id: t.id, title: t.title, artist: t.artist, duration: t.duration || 0, ...(t.cover ? { cover: t.cover } : {}), ...(t.qid ? { qid: t.qid } : {}) }
 
 function libraryPayload(lib) {
   const settings = { ...lib.settings }
@@ -131,7 +132,6 @@ export function CloudProvider({ children }) {
 
   const sent = useRef({ library: null, playlists: new Map() }) // last JSON synced either way
   const ready = useRef(false) // first remote snapshots applied
-  const lastCommand = useRef(null)
 
   useEffect(() => onAuth((u) => setUser(u ?? null)), [])
 
@@ -276,6 +276,7 @@ export function CloudProvider({ children }) {
     volume: player.volume,
     shuffle: player.shuffle,
     repeat: player.repeat,
+    seeks: player.seeks, // republish right after a seek
     queue: player.queue.slice(player.index, player.index + 50).map(strip),
   })
 
@@ -312,7 +313,7 @@ export function CloudProvider({ children }) {
   // On change of song / play state, plus a heartbeat.
   useEffect(() => {
     if (!user) return
-    const t = setTimeout(publish, 600)
+    const t = setTimeout(publish, 250)
     return () => clearTimeout(t)
   }, [user, stateJson, publish])
 
@@ -336,14 +337,24 @@ export function CloudProvider({ children }) {
   useEffect(() => {
     if (!user) return setDevices([])
     return onSnapshot(collection(db, 'users', user.uid, 'devices'), (snap) => {
-      const list = snap.docs.map((d) => d.data())
-      setDevices(list)
-      const mine = list.find((d) => d.id === myId)
-      const cmd = mine?.command
-      if (cmd && cmd.id !== lastCommand.current && Date.now() - cmd.at < 60_000) {
-        lastCommand.current = cmd.id
-        run(cmd)
-        updateDoc(doc(db, 'users', user.uid, 'devices', myId), { command: deleteField() }).catch(() => {})
+      setDevices(snap.docs.map((d) => d.data()))
+    })
+  }, [user, myId])
+
+  // Command inbox: one document per command, run in order, then deleted —
+  // so quick taps (pause, then skip) are never lost or overwritten.
+  useEffect(() => {
+    if (!user) return
+    const handled = new Set()
+    return onSnapshot(collection(db, 'users', user.uid, 'devices', myId, 'commands'), (snap) => {
+      const fresh = snap.docs
+        .map((d) => d.data())
+        .filter((c) => c?.id && !handled.has(c.id))
+        .sort((a, b) => a.at - b.at)
+      for (const cmd of fresh) {
+        handled.add(cmd.id)
+        if (Date.now() - cmd.at < 60_000) run(cmd)
+        deleteDoc(doc(db, 'users', user.uid, 'devices', myId, 'commands', cmd.id)).catch(() => {})
       }
     })
   }, [user, myId]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -405,7 +416,7 @@ export function CloudProvider({ children }) {
       default:
     }
     // Tell the other devices about the new state right away.
-    setTimeout(() => publishRef.current?.(), 900)
+    setTimeout(() => publishRef.current?.(), 700)
   }
   const publishRef = useRef(null)
   publishRef.current = publish
@@ -416,7 +427,9 @@ export function CloudProvider({ children }) {
       if (!user) return
       const cmd = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type, at: Date.now(), from: myId, fromName: myName }
       if (payload !== undefined) cmd.payload = payload
-      updateDoc(doc(db, 'users', user.uid, 'devices', targetId), { command: cmd }).catch(() => toast('That device didn’t respond.'))
+      setDoc(doc(db, 'users', user.uid, 'devices', targetId, 'commands', cmd.id), cmd).catch(() =>
+        toast('Couldn’t reach that device.'),
+      )
     },
     [user, myId, myName, toast],
   )
@@ -598,7 +611,7 @@ export function RemoteBridge({ cloud, children }) {
     index: 0,
     playing: !!eff.playing,
     buffering: false,
-    loading: false,
+    loading: !!eff.skipping,
     ad: null,
     error: null,
     needsTap: false,
@@ -614,8 +627,14 @@ export function RemoteBridge({ cloud, children }) {
       send('toggle')
       optimisticSet({ playing: !eff.playing })
     },
-    next: () => send('next'),
-    prev: () => send('prev'),
+    next: () => {
+      send('next')
+      optimisticSet({ skipping: true })
+    },
+    prev: () => {
+      send('prev')
+      optimisticSet({ skipping: true })
+    },
     seek: (time) => {
       send('seek', { time })
       optimisticSet({ position: time })

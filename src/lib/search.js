@@ -60,7 +60,7 @@ async function searchYouTube(q, key) {
 
   return items.map((i) => {
     const { title, artist } = parseVideoTitle(decodeEntities(i.snippet.title), decodeEntities(i.snippet.channelTitle))
-    return { id: i.id.videoId, title, artist, duration: durations[i.id.videoId] || 0 }
+    return { id: i.id.videoId, title, artist, duration: durations[i.id.videoId] || 0, raw: decodeEntities(i.snippet.title), channel: decodeEntities(i.snippet.channelTitle) }
   })
 }
 
@@ -143,7 +143,7 @@ async function searchPiped(base, q) {
     .map((i) => {
       const id = new URL(i.url, 'https://youtube.com').searchParams.get('v')
       const { title, artist } = parseVideoTitle(i.title, i.uploaderName)
-      return { id, title, artist, duration: i.duration > 0 ? i.duration : 0 }
+      return { id, title, artist, duration: i.duration > 0 ? i.duration : 0, raw: i.title, channel: i.uploaderName || '' }
     })
     .filter((t) => t.id)
 }
@@ -155,7 +155,7 @@ async function searchInvidious(base, q) {
     .slice(0, 25)
     .map((i) => {
       const { title, artist } = parseVideoTitle(i.title, i.author)
-      return { id: i.videoId, title, artist, duration: i.lengthSeconds || 0 }
+      return { id: i.videoId, title, artist, duration: i.lengthSeconds || 0, raw: i.title, channel: i.author || '' }
     })
 }
 
@@ -196,28 +196,72 @@ function fromStreamItem(i) {
 
 /* ── Matching a song (title + artist) to a YouTube video ───────────── */
 
-const norm = (s = '') => s.toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N} ]/gu, '').replace(/\s+/g, ' ').trim()
+const norm = (s = '') => s.toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^\p{L}\p{N} ]/gu, ' ').replace(/\s+/g, ' ').trim()
+const words = (s) => new Set(norm(s).split(' ').filter((w) => w.length > 1 || /\d/.test(w)))
+const AVOID = /\b(cover|live|karaoke|instrumental|remix|8d|slowed|reverb|sped up|nightcore|reaction|tutorial|lesson|bass boosted|1 hour|10 hours|loop)\b/
+
+function artistsOf(artist = '') {
+  return artist
+    .split(/\s*(?:,|&|\bx\b|\bfeat\.?|\bft\.?|\bwith\b|\band\b)\s*/i)
+    .map(norm)
+    .filter(Boolean)
+}
 
 /**
- * Find the best YouTube video for a known song (imports, recommendations).
- * Prefers results whose duration is close to the original and whose title
- * mentions the song; avoids covers/live/remix unless the song is one.
+ * Find the YouTube video for a known song (Spotify/CSV imports,
+ * recommendations, radio). Strict on purpose: it must be the same title,
+ * by the same artist, of about the same length — and it prefers the
+ * official audio (YouTube Music "Topic" uploads). If nothing is close
+ * enough it returns null ("not found") rather than a wrong song.
  */
-export async function matchTrack({ title, artist, duration }, { apiKey } = {}) {
-  const { tracks } = await searchTracks(`${artist} ${title}`, { apiKey })
-  if (!tracks.length) return null
-  const wantTitle = norm(title)
-  const avoid = /\b(cover|live|karaoke|instrumental|remix|8d|slowed|reverb|sped up|nightcore)\b/
-  const score = (t) => {
-    const name = norm(`${t.title} ${t.artist}`)
-    let s = 0
-    if (name.includes(wantTitle)) s += 5
-    if (name.includes(norm(artist).split(' ')[0])) s += 3
-    if (avoid.test(name) && !avoid.test(wantTitle)) s -= 6
-    if (duration && t.duration) s -= Math.min(6, Math.abs(t.duration - duration) / 8)
+export async function matchTrack({ title, artist, duration }, { apiKey, exclude = [] } = {}) {
+  const cleanTitle = cleanForMatch(title)
+  const wantWords = words(cleanTitle)
+  const wantArtists = artistsOf(artist)
+  const wantAvoid = AVOID.test(norm(title))
+
+  const score = (c) => {
+    if (!c.id || exclude.includes(c.id)) return -1
+    const rawTitle = c.raw || c.title
+    const channel = norm(c.channel || c.artist || '')
+    const everything = norm(`${rawTitle} ${c.channel || ''}`)
+    // Title: share most of the song's words (ignoring the artist's name).
+    let gotWords = words(cleanForMatch(rawTitle))
+    wantArtists.forEach((a) => a.split(' ').forEach((w) => !wantWords.has(w) && gotWords.delete(w)))
+    gotWords = [...gotWords].filter((w) => !['official', 'video', 'audio', 'music', 'lyrics', 'lyric', 'hd', 'topic', 'visualizer'].includes(w))
+    const overlap = [...wantWords].filter((w) => gotWords.includes(w)).length
+    const titleScore = wantWords.size ? overlap / wantWords.size : 0
+    const extra = gotWords.length - overlap // words that aren't in the song title
+    if (titleScore < 0.75) return -1
+    // Artist: main artist must appear in the channel or the title.
+    if (!wantArtists.some((a) => everything.includes(a) || channel.includes(a.split(' ')[0]))) return -1
+    if (!wantAvoid && AVOID.test(everything)) return -1
+    const topic = /\btopic\b/.test(channel) || norm(c.channel || '') === wantArtists[0]
+    let s = titleScore * 10 - Math.max(0, extra - 2) * 0.8 + (topic ? 3 : 0)
+    if (duration && c.duration) {
+      const off = Math.abs(c.duration - duration)
+      if (off > 30) return -1 // a different version/edit — or a different song
+      s += Math.max(0, 6 - off / 2)
+    }
     return s
   }
-  return [...tracks].sort((a, b) => score(b) - score(a))[0]
+
+  const queries = [`${wantArtists[0] || artist} ${cleanTitle}`, `${cleanTitle} ${artist} official audio`]
+  let best = null
+  for (const q of queries) {
+    let tracks = []
+    try {
+      ;({ tracks } = await searchTracks(q, { apiKey }))
+    } catch {
+      continue
+    }
+    for (const t of tracks) {
+      const sc = score(t)
+      if (sc >= 0 && (!best || sc > best.score)) best = { ...t, score: sc }
+    }
+    if (best && best.score >= 12) break // confident — skip the second search
+  }
+  return best ? { id: best.id, duration: best.duration, title: best.title, artist: best.artist } : null
 }
 
 /* ── Album version of a song (for exact lyric timing) ─────────────────

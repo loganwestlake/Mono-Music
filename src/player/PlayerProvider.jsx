@@ -44,8 +44,12 @@ export const PlayerContext = createContext(null)
 export const TimeContext = createContext({ time: 0, duration: 0, ad: null })
 
 const YT_STATE = { ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 }
-const STALL_MS = 10000
-const MAX_STREAM_TRIES = 3
+const STALL_MS = 6000 // a stream that hasn't started by now → YouTube
+const RESOLVE_MS = 4000 // max wait for an ad-free source before using YouTube
+const MAX_STREAM_TRIES = 1
+const YT_READY_MS = 8000 // YouTube player must be ready by now, else it's blocked
+const YT_START_MS = 12000 // a YouTube song must start by now
+const GIVE_UP_MS = 25000 // nothing may spin longer than this
 const LISTEN_TICK = 10
 
 const SAVED_DEFAULTS = { queue: [], index: 0, time: 0, volume: 80, shuffle: false, repeat: 'off', original: null, rate: 1 }
@@ -59,7 +63,11 @@ export function PlayerProvider({ children }) {
   const preferAudio = IS_TOUCH && viewMode !== 'video'
   // Play the album recording (YouTube Music "Topic" upload) instead of a
   // video upload when we can: it's the exact audio lyrics are timed to.
-  const albumMode = library.settings.albumAudio !== false && viewMode !== 'video'
+  // Ad-free streams + album lookups need your own relay: public servers block
+  // browsers (CORS). Without it, go straight to YouTube instead of waiting.
+  const hasRelay = !!library.settings.proxyUrl
+  const streamMode = adFree && hasRelay
+  const albumMode = hasRelay && library.settings.albumAudio !== false && viewMode !== 'video'
   const albumModeRef = useRef(albumMode)
   albumModeRef.current = albumMode
   /** The YouTube id actually loaded for a track. */
@@ -87,6 +95,8 @@ export function PlayerProvider({ children }) {
   const [duration, setDuration] = useState(0)
   const [ad, setAd] = useState(null) // { remaining, elapsed } while a YouTube ad plays
   const [needsTap, setNeedsTap] = useState(false) // iOS: YouTube wants a tap inside its player
+  const needsTapRef = useRef(false)
+  needsTapRef.current = needsTap
   const [mountEl, setMountEl] = useState(null)
 
   const ytRef = useRef(null)
@@ -302,7 +312,7 @@ export function PlayerProvider({ children }) {
       }
       // Quietly look for an ad-free copy once per song; the listener just
       // sees "please wait" and a spinner meanwhile.
-      if (adFree && adRetriedRef.current !== track.id) {
+      if (streamMode && adRetriedRef.current !== track.id) {
         adRetriedRef.current = track.id
         handlers.current.escapeAd?.()
       }
@@ -393,6 +403,9 @@ export function PlayerProvider({ children }) {
     window.addEventListener('click', unlock, true)
 
     setYtStatus('loading')
+    const readyTimer = setTimeout(() => {
+      if (!cancelled && !ytRef.current?.getPlayerState) setYtStatus('blocked')
+    }, YT_READY_MS)
     loadYouTubeApi()
       .then((YT) => {
         if (cancelled) return
@@ -403,6 +416,7 @@ export function PlayerProvider({ children }) {
           playerVars: { ...PLAYER_VARS, origin: window.location.origin },
           events: {
             onReady: (e) => {
+              clearTimeout(readyTimer)
               e.target.setVolume(volumeRef.current)
               setYtStatus('ready')
             },
@@ -415,6 +429,7 @@ export function PlayerProvider({ children }) {
 
     return () => {
       cancelled = true
+      clearTimeout(readyTimer)
       window.removeEventListener('touchend', unlock, true)
       window.removeEventListener('click', unlock, true)
       for (const el of [video, audio]) {
@@ -453,6 +468,14 @@ export function PlayerProvider({ children }) {
     setNeedsTap(false)
     if (wantPlayRef.current) {
       yt.loadVideoById({ videoId: id, startSeconds: start })
+      const startToken = tokenRef.current
+      setTimeout(() => {
+        if (startToken !== tokenRef.current || engineRef.current !== 'youtube' || playingRef.current || adRef.current) return
+        if (IS_IOS && needsTapRef.current) return
+        setBuffering(false)
+        setError('This song wouldn’t start.')
+        skipBroken('This song wouldn’t start.')
+      }, YT_START_MS)
       // iOS won't let YouTube start without a tap inside its own player.
       if (IS_IOS) {
         const token = tokenRef.current
@@ -475,8 +498,9 @@ export function PlayerProvider({ children }) {
   const tippedRef = useRef(false)
   function fallbackToYouTube(start) {
     // Public servers refuse requests from websites (CORS). One gentle tip.
-    if (!hasProxy() && !tippedRef.current) {
+    if (!hasProxy() && !tippedRef.current && localStorage.getItem('mono:relay-tip') !== '1') {
       tippedRef.current = true
+      localStorage.setItem('mono:relay-tip', '1')
       toast('Ad-free servers are blocking browsers. Set up your free ad-free server to fix it.', {
         action: { label: 'How', run: () => (window.location.hash = '/settings') },
       })
@@ -490,7 +514,8 @@ export function PlayerProvider({ children }) {
     switchEngine('stream')
     eng.stopInactive()
     setBuffering(wantPlayRef.current)
-    resolveStream(playIdOf(track), { exclude: triedRef.current, preferAudio })
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('slow')), RESOLVE_MS))
+    Promise.race([resolveStream(playIdOf(track), { exclude: triedRef.current, preferAudio }), timeout])
       .then((src) => {
         if (token !== tokenRef.current) return
         mediaKindRef.current = src.hasVideo ? 'video' : 'audio'
@@ -528,9 +553,10 @@ export function PlayerProvider({ children }) {
         if (currentRef.current?.id !== qid) return
         if (id) setQueue((q) => q.map((t) => (t.id === qid ? { ...t, id } : t)))
         else {
+          const msg = hasRelay || library.settings.apiKey ? 'Couldn’t find this song.' : 'Can’t search for songs until the ad-free server is set up (Settings).'
           setBuffering(false)
-          setError('Couldn’t find this song on YouTube.')
-          skipBroken('Couldn’t find this song on YouTube.')
+          setError(msg)
+          skipBroken(msg)
         }
       })
       return
@@ -540,7 +566,7 @@ export function PlayerProvider({ children }) {
     if (albumMode && current.playId === undefined && !current.pending) {
       const id = current.id
       setBuffering(true)
-      Promise.race([findAlbumVersion(current), new Promise((r) => setTimeout(() => r(null), 2500))]).then((hit) => {
+      Promise.race([findAlbumVersion(current), new Promise((r) => setTimeout(() => r(null), 1500))]).then((hit) => {
         if (currentRef.current?.id !== id) return
         const usable = hit?.id && hit.id !== id ? hit : null
         setQueue((q) =>
@@ -550,7 +576,7 @@ export function PlayerProvider({ children }) {
       return
     }
 
-    const mode = adFree ? 'stream' : 'youtube'
+    const mode = streamMode ? 'stream' : 'youtube'
     const key = `${current.id}|${playIdOf(current)}|${mode}${mode === 'stream' && preferAudio ? '-a' : ''}`
     if (loadedKeyRef.current === key) return
 
@@ -570,7 +596,7 @@ export function PlayerProvider({ children }) {
 
     if (mode === 'youtube') return loadYouTube(start)
     loadStream(start)
-  }, [mountEl, current, adFree, preferAudio, albumMode]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mountEl, current, streamMode, preferAudio, albumMode]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // A YouTube load that was waiting for the API.
   useEffect(() => {
@@ -596,10 +622,10 @@ export function PlayerProvider({ children }) {
         )
         if (usable) play = usable.id
       }
-      if (adFree) prefetchStream(play, { preferAudio })
+      if (streamMode) prefetchStream(play, { preferAudio })
     }, 4000)
     return () => clearTimeout(id)
-  }, [playing, upcoming, adFree, preferAudio, albumMode, resolve])
+  }, [playing, upcoming, streamMode, preferAudio, albumMode, resolve])
 
   /* ── Clock, ads, sleep timer, listening time ──────────────────────── */
   const sleepRef = useRef(sleep)
@@ -623,6 +649,21 @@ export function PlayerProvider({ children }) {
     }, 250)
     return () => clearInterval(id)
   }, [playing, eng]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ── Safety net: never spin forever ───────────────────────────────── */
+  const stuck = (resolving || buffering) && !playing && !ad && !needsTap && !!current
+  useEffect(() => {
+    if (!stuck || !wantPlayRef.current) return
+    const id = setTimeout(() => {
+      tokenRef.current++ // ignore whatever was still pending
+      setBuffering(false)
+      setResolving(false)
+      const msg = 'This song is taking too long to load.'
+      setError(msg)
+      skipBroken(msg)
+    }, GIVE_UP_MS)
+    return () => clearTimeout(id)
+  }, [stuck, current?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── Persistence ─────────────────────────────────────────────────── */
   const timeRef = useRef(time)
@@ -772,10 +813,12 @@ export function PlayerProvider({ children }) {
     else setIndex(index - 1)
   }, [queue.length, index, restartCurrent, eng])
 
+  const [seeks, setSeeks] = useState(0) // lets other devices know the position jumped
   const seek = useCallback(
     (seconds) => {
       eng.seek(seconds)
       setTime(seconds)
+      setSeeks((n) => n + 1)
     },
     [eng],
   )
@@ -956,6 +999,7 @@ export function PlayerProvider({ children }) {
       setRate,
       setSleep,
       needsTap,
+      seeks,
       duration: duration || current?.duration || 0,
       loading: !!ad || resolving || (buffering && wantPlayRef.current),
       jump,
@@ -968,7 +1012,7 @@ export function PlayerProvider({ children }) {
     }),
     [engine, hasVideo, status, error, resolving, queue, index, current, playing, buffering, shuffle, repeat, volume,
       muted, rate, sleep, playTracks, playTrack, playFrom, playNext, enqueue, startRadio, toggle, next, prev, seek, getTime,
-      setVolume, toggleMute, setRate, setSleep, needsTap, ad, duration, jump, removeAt, setUpcoming, clearUpcoming, toggleShuffle,
+      setVolume, toggleMute, setRate, setSleep, needsTap, seeks, ad, duration, jump, removeAt, setUpcoming, clearUpcoming, toggleShuffle,
       cycleRepeat, videoPictureInPicture],
   )
 
