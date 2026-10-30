@@ -8,6 +8,7 @@ import {
   Pause,
   Pencil,
   Play,
+  Radio,
   Send,
   SkipBack,
   SkipForward,
@@ -118,8 +119,11 @@ function SignedOut() {
 function DeviceList({ onSelect }) {
   const cloud = useCloud()
   const [editing, setEditing] = useState(false)
+  const player = usePlayer()
   const others = cloud.devices.filter((d) => !d.me)
   const me = cloud.devices.find((d) => d.me)
+  const onlineOthers = others.filter((d) => d.online)
+  const anyPlaying = player.playing || onlineOthers.some((d) => d.state?.playing)
 
   return (
     <div className="pb-2">
@@ -151,6 +155,22 @@ function DeviceList({ onSelect }) {
         )}
         {!editing && <IconButton icon={Pencil} label="Rename this device" tone="light" size={14} className="h-8 w-8" onClick={() => setEditing(true)} />}
       </div>
+      {player.remote && (
+        <PillButton icon={ArrowDownToLine} className="mt-2 h-11 w-full" onClick={() => cloud.takeOver(player.remote)}>
+          Play on this device
+        </PillButton>
+      )}
+
+      {onlineOthers.length > 0 && (
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <PillButton icon={Radio} className="h-12" onClick={cloud.playEverywhere} disabled={!player.current && !onlineOthers.some((d) => d.state?.track)}>
+            Play everywhere
+          </PillButton>
+          <PillButton variant="outline" icon={Pause} className="h-12" onClick={cloud.pauseEverywhere} disabled={!anyPlaying}>
+            Pause all
+          </PillButton>
+        </div>
+      )}
 
       <p className="mt-6 mb-2 text-[10px] font-bold uppercase tracking-widest text-neutral-400">Other devices</p>
       {others.length === 0 ? (
@@ -286,7 +306,7 @@ function Remote({ device }) {
             Play it here instead
           </PillButton>
         )}
-        {player.current && (
+        {player.current && !player.remote && (
           <PillButton variant="outline" icon={Send} className="h-12 w-full" onClick={() => cloud.sendHere(device)}>
             Send my music to this device
           </PillButton>

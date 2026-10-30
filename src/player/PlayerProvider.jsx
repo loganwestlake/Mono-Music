@@ -40,8 +40,8 @@ const SILENCE =
  * usePlayer() for queue/controls, usePlayerTime() for time + ad state.
  */
 
-const PlayerContext = createContext(null)
-const TimeContext = createContext({ time: 0, duration: 0, ad: null })
+export const PlayerContext = createContext(null)
+export const TimeContext = createContext({ time: 0, duration: 0, ad: null })
 
 const YT_STATE = { ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 }
 const STALL_MS = 10000

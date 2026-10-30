@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { collection, deleteDoc, deleteField, doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore'
 import { db, onAuth, signInWithGoogle, signOut } from '../lib/firebase'
-import { usePlayer } from '../player/PlayerProvider'
+import { PlayerContext, TimeContext, usePlayer } from '../player/PlayerProvider'
 import { useLibrary } from './library'
 import { useToast } from './toast'
 
@@ -118,6 +118,8 @@ export function CloudProvider({ children }) {
   const [user, setUser] = useState(undefined) // undefined = loading, null = signed out
   const [syncState, setSyncState] = useState('idle') // idle | syncing | synced | error
   const [devices, setDevices] = useState([])
+  const devicesRef = useRef([])
+  devicesRef.current = devices
   const [myName, setMyName] = useState(() => localStorage.getItem('mono:device-name') || describeDevice().name)
   const [, setNow] = useState(0)
 
@@ -272,6 +274,8 @@ export function CloudProvider({ children }) {
     track: strip(player.current) || null,
     playing: player.playing,
     volume: player.volume,
+    shuffle: player.shuffle,
+    repeat: player.repeat,
     queue: player.queue.slice(player.index, player.index + 50).map(strip),
   })
 
@@ -293,6 +297,8 @@ export function CloudProvider({ children }) {
             position: p.getTime(),
             at: Date.now(),
             volume: p.volume,
+            shuffle: p.shuffle,
+            repeat: p.repeat,
             queue: p.queue.slice(p.index, p.index + 50).map(strip),
           },
           ...extra,
@@ -375,13 +381,34 @@ export function CloudProvider({ children }) {
         break
       case 'playFrom':
         if (cmd.payload?.tracks?.length) {
-          p.playFrom(cmd.payload.tracks, cmd.payload.index || 0, cmd.payload.time || 0)
-          toast(`Playing here${from}`)
+          // Account for the time the command spent in flight (Play everywhere).
+          const late = cmd.payload.sentAt ? Math.max(0, (Date.now() - cmd.payload.sentAt) / 1000) : 0
+          p.playFrom(cmd.payload.tracks, cmd.payload.index || 0, (cmd.payload.time || 0) + (cmd.payload.sentAt ? late : 0))
+          if (!cmd.payload.quiet) toast(`Playing here${from}`)
         }
+        break
+      case 'enqueue':
+        if (cmd.payload?.track) p.enqueue(cmd.payload.track)
+        break
+      case 'playNext':
+        if (cmd.payload?.track) p.playNext(cmd.payload.track)
+        break
+      case 'shuffle':
+        p.toggleShuffle()
+        break
+      case 'repeat':
+        p.cycleRepeat()
+        break
+      case 'radio':
+        if (cmd.payload?.track) p.startRadio(cmd.payload.track)
         break
       default:
     }
+    // Tell the other devices about the new state right away.
+    setTimeout(() => publishRef.current?.(), 900)
   }
+  const publishRef = useRef(null)
+  publishRef.current = publish
 
   /* ── public API ─────────────────────────────────────────────────── */
   const sendCommand = useCallback(
@@ -424,6 +451,42 @@ export function CloudProvider({ children }) {
     [sendCommand, toast],
   )
 
+  /**
+   * Play everywhere: the same music, at the same moment, on every online
+   * device (this one included). Source: what's playing here, else the
+   * device that's playing elsewhere.
+   */
+  const playEverywhere = useCallback(() => {
+    const p = playerRef.current
+    const online = devicesRef.current.filter((d) => d.id !== myId && Date.now() - (d.lastSeen || 0) < ONLINE_MS)
+    let tracks
+    let time
+    if (p.current) {
+      tracks = p.queue.slice(p.index, p.index + 50).map(strip)
+      time = p.getTime()
+    } else {
+      const src = online.find((d) => d.state?.playing && d.state.track) || online.find((d) => d.state?.track)
+      if (!src) return toast('Play something first, then press Play everywhere.')
+      tracks = src.state.queue?.length ? src.state.queue : [src.state.track]
+      time = (src.state.position || 0) + (src.state.playing ? (Date.now() - src.state.at) / 1000 : 0)
+    }
+    const sentAt = Date.now()
+    online.forEach((d) => sendCommand(d.id, 'playFrom', { tracks, index: 0, time, sentAt }))
+    if (p.current && p.playing) {
+      // Already playing here — leave it running.
+    } else p.playFrom(tracks, 0, time)
+    toast(`Playing on ${online.length + 1} device${online.length ? 's' : ''}`)
+  }, [myId, sendCommand, toast])
+
+  const pauseEverywhere = useCallback(() => {
+    const p = playerRef.current
+    devicesRef.current
+      .filter((d) => d.id !== myId && d.state?.playing)
+      .forEach((d) => sendCommand(d.id, 'pause'))
+    if (p.playing) p.toggle()
+    toast('Paused everywhere')
+  }, [myId, sendCommand, toast])
+
   const renameDevice = useCallback(
     (name) => {
       const clean = name.trim().slice(0, 40) || describeDevice().name
@@ -458,10 +521,125 @@ export function CloudProvider({ children }) {
     sendCommand,
     sendHere,
     takeOver,
+    playEverywhere,
+    pauseEverywhere,
     forgetDevice: (id) => user && deleteDoc(doc(db, 'users', user.uid, 'devices', id)).catch(() => {}),
   }
 
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>
+  return (
+    <Ctx.Provider value={value}>
+      <RemoteBridge cloud={value}>{children}</RemoteBridge>
+    </Ctx.Provider>
+  )
 }
 
 export const useCloud = () => useContext(Ctx)
+
+/* ── Seamless remote ────────────────────────────────────────────────────
+ * Spotify Connect–style: when another of your devices is playing (and this
+ * one isn't), every screen here — mini player, full player, lyrics, queue —
+ * shows that device's music as if it were playing locally, and every
+ * control (including tapping a song) is sent to that device.
+ * Implemented by re-providing the player contexts for the UI below.
+ */
+export function RemoteBridge({ cloud, children }) {
+  const local = usePlayer()
+  const [connectedId, setConnectedId] = useState(null)
+  const [optimistic, setOptimistic] = useState(null) // { stateAt, playing, position, at }
+  const [, tick] = useState(0)
+
+  const others = cloud.devices.filter((d) => !d.me && d.online && d.state?.track)
+  const playingElsewhere = others.find((d) => d.state.playing)
+
+  // Pick which device the UI follows.
+  useEffect(() => {
+    if (local.playing || local.loading) {
+      if (connectedId) setConnectedId(null)
+      return
+    }
+    if (playingElsewhere && playingElsewhere.id !== connectedId) setConnectedId(playingElsewhere.id)
+    else if (!connectedId && !local.current && others[0]) setConnectedId(others[0].id)
+    else if (connectedId && !others.some((d) => d.id === connectedId)) setConnectedId(null)
+  }, [local.playing, local.loading, local.current, playingElsewhere?.id, connectedId, others.length]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const remote = connectedId ? others.find((d) => d.id === connectedId) : null
+  const s = remote?.state
+
+  // Clear optimistic UI once the device reports its new state.
+  useEffect(() => setOptimistic(null), [s?.at])
+
+  const eff = optimistic && optimistic.stateAt === s?.at ? optimistic : s
+  const duration = s?.track?.duration || 0
+  const timeNow = () => {
+    if (!eff) return 0
+    const t = (eff.position || 0) + (eff.playing ? (Date.now() - (eff.at || Date.now())) / 1000 : 0)
+    return Math.max(0, duration ? Math.min(duration, t) : t)
+  }
+
+  useEffect(() => {
+    if (!remote || !eff?.playing) return
+    const id = setInterval(() => tick((n) => n + 1), 250)
+    return () => clearInterval(id)
+  }, [remote?.id, eff?.playing]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!remote) return children
+
+  const send = (type, payload) => cloud.sendCommand(remote.id, type, payload)
+  const queue = s.queue?.length ? s.queue : [s.track]
+  const sendList = (tracks, i = 0, time = 0) =>
+    send('playFrom', { tracks: tracks.slice(i, i + 50).map(strip), index: 0, time, quiet: true })
+  const optimisticSet = (patch) => setOptimistic({ stateAt: s.at, playing: eff.playing, position: timeNow(), at: Date.now(), ...patch })
+
+  const value = {
+    ...local,
+    remote,
+    current: s.track,
+    queue,
+    index: 0,
+    playing: !!eff.playing,
+    buffering: false,
+    loading: false,
+    ad: null,
+    error: null,
+    needsTap: false,
+    status: 'ready',
+    duration,
+    volume: s.volume ?? local.volume,
+    muted: false,
+    shuffle: !!s.shuffle,
+    repeat: s.repeat || 'off',
+    resolving: false,
+    getTime: timeNow,
+    toggle: () => {
+      send('toggle')
+      optimisticSet({ playing: !eff.playing })
+    },
+    next: () => send('next'),
+    prev: () => send('prev'),
+    seek: (time) => {
+      send('seek', { time })
+      optimisticSet({ position: time })
+    },
+    setVolume: (v) => send('volume', { value: v }),
+    toggleMute: () => send('volume', { value: (s.volume ?? 80) > 0 ? 0 : 60 }),
+    toggleShuffle: () => send('shuffle'),
+    cycleRepeat: () => send('repeat'),
+    playTracks: (tracks, i = 0) => sendList(tracks, i),
+    playTrack: (t) => sendList([t]),
+    playFrom: (tracks, i, time) => sendList(tracks, i, time),
+    jump: (i) => sendList(queue, i),
+    enqueue: (t) => send('enqueue', { track: strip(t) }),
+    playNext: (t) => send('playNext', { track: strip(t) }),
+    startRadio: (t) => send('radio', { track: strip(t) }),
+    removeAt: () => {},
+    setUpcoming: () => {},
+    clearUpcoming: () => {},
+  }
+  const timeValue = { time: timeNow(), duration, ad: null }
+
+  return (
+    <PlayerContext.Provider value={value}>
+      <TimeContext.Provider value={timeValue}>{children}</TimeContext.Provider>
+    </PlayerContext.Provider>
+  )
+}

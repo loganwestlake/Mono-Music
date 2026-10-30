@@ -13,7 +13,7 @@ import { activeLineIndex, effectiveOffset, useLyrics, useTrackOffset } from './u
 
 /**
  * Full-screen, Apple Music–style lyrics.
- *  · huge bold lines; the sung line fills in left→right (karaoke) and glows
+ *  · huge bold lines; the whole line being sung is bright white
  *  · the rest are dim and softly blurred by distance; lines glide up in a
  *    staggered spring cascade
  *  · a slowly drifting, layered blur of the artwork behind everything
@@ -301,8 +301,7 @@ const EASE = 'cubic-bezier(0.2, 0.9, 0.25, 1)'
  * Smoothness notes:
  *  · The clock is read in a requestAnimationFrame loop, not from React
  *    state — React only re-renders when the *active line* changes.
- *  · The karaoke fill and instrumental dots are written straight to the DOM
- *    every frame (60fps, no re-render).
+ *  · The instrumental dots are written straight to the DOM every frame.
  *  · Line movement is a CSS transform transition (GPU), staggered with
  *    transition-delay for the cascade. Soft blur only on desktop.
  */
@@ -333,12 +332,12 @@ function SyncedLyrics({ lines: raw, size, offset, onPick }) {
         setActive(i)
       }
       const el = lineRefs.current[i]
-      if (el && i >= 0) {
+      if (el && i >= 0 && !lines[i].text) {
+        // Instrumental break: fill the three dots in as it plays.
         const start = lines[i].at
         const end = lines[i + 1]?.at ?? start + 5
         const p = Math.min(1, Math.max(0, (t - start) / Math.max(0.5, end - start - 0.2)))
-        if (lines[i].text) el.style.setProperty('--fill', `${(p * 100).toFixed(1)}%`)
-        else {
+        {
           const dots = el.querySelectorAll('[data-dot]')
           dots.forEach((d, k) => (d.style.opacity = String(0.25 + 0.75 * Math.min(1, Math.max(0, p * 3 - k)))))
         }
@@ -423,7 +422,7 @@ function SyncedLyrics({ lines: raw, size, offset, onPick }) {
               className="origin-left cursor-pointer py-[0.32em] leading-[1.1] font-extrabold tracking-[-0.025em] will-change-transform hover:!opacity-90"
             >
               {line.text ? (
-                <span className={isActive ? 'lyric-fill' : undefined}>{line.text}</span>
+                line.text
               ) : (
                 <InstrumentalDots active={isActive} />
               )}

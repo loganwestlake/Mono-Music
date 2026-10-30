@@ -22,6 +22,7 @@ import {
   Save,
   Shuffle,
   SkipBack,
+  Speaker,
   SkipForward,
   Volume1,
   Volume2,
@@ -53,7 +54,7 @@ export default function NowPlaying({ docked }) {
   const player = usePlayer()
   const { isLiked, toggleLike } = useLibrary()
   const track = player.current
-  const { viewMode, panel, sheetOpen, setSheetOpen } = useUi()
+  const { viewMode, panel, sheetOpen, setSheetOpen, setDevicesOpen } = useUi()
   const onClose = () => setSheetOpen(false)
   const stageRef = useRef(null)
   const visible = docked ? panel : sheetOpen
@@ -64,6 +65,7 @@ export default function NowPlaying({ docked }) {
   const showVeil =
     !player.needsTap &&
     (!track ||
+      !!player.remote ||
       !!player.ad ||
       (player.engine === 'stream' && !player.hasVideo) ||
       (!player.playing && (player.engine === 'youtube' || viewMode === 'art')))
@@ -137,6 +139,18 @@ export default function NowPlaying({ docked }) {
               viewMode === 'video' ? 'w-full' : docked ? 'w-[min(280px,80%)]' : 'w-[min(86vw,380px)]'
             }`}
           />
+
+          {player.remote && (
+            <button
+              type="button"
+              onClick={() => setDevicesOpen(true)}
+              className="mt-5 flex items-center gap-2 rounded-full bg-[#111] px-4 py-2 text-[11px] font-bold tracking-tight text-white"
+            >
+              <span className={`h-1.5 w-1.5 rounded-full bg-white ${player.playing ? 'animate-pulse' : 'opacity-40'}`} />
+              <Speaker size={13} strokeWidth={1.75} />
+              {player.playing ? 'Playing' : 'Paused'} on {player.remote.name}
+            </button>
+          )}
 
           {player.needsTap && (
             <p className="mt-4 rounded-full bg-[#111] px-4 py-2 text-center text-[11px] font-semibold text-white">
