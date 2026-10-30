@@ -28,11 +28,34 @@ A strictly monochrome, editorial music player that uses YouTube as a hidden engi
 
 **Lyrics**
 - Full-screen Apple Music–style lyrics: karaoke fill, cascading motion, drifting artwork backdrop,
-  instrumental dots, tap-to-seek, adjustable size and timing
+  instrumental dots, tap-to-seek, adjustable size
+- Lyrics are matched to the length of what's actually playing; per-song timing and tap-to-sync
+
+**Accounts & devices**
+- Sign in with Google: playlists, likes, history, stats and settings sync across devices
+- Devices menu: see what each signed-in device is playing, control it remotely (play/pause, skip,
+  seek, volume), move playback to this device or send it to another
 
 **Everything else**
 - Editorial monochrome design, dark mode (D), command palette (⌘K), keyboard shortcuts (?),
   installable app that opens offline
+
+## Firebase setup (accounts, sync, devices)
+
+The Firebase web config in `src/lib/firebase.js` is **not a secret** — Firebase web configs are public
+identifiers that every visitor's browser receives. What protects your data is the security rules and the
+console settings below. One-time steps in the [Firebase console](https://console.firebase.google.com/project/mono-music-c0b63):
+
+1. **Authentication → Sign-in method → Google → Enable.**
+2. **Authentication → Settings → Authorized domains → Add** `loganwestlake.github.io`.
+3. **Firestore Database → Create database** (production mode).
+4. **Firestore → Rules:** paste the contents of [`firestore.rules`](firestore.rules) and **Publish**
+   (or run `firebase deploy --only firestore:rules`). Each signed-in user can then read/write only
+   `users/{their uid}/…` — nobody else's data.
+5. *(Recommended)* [Google Cloud → Credentials](https://console.cloud.google.com/apis/credentials?project=mono-music-c0b63):
+   edit the "Browser key", set **Application restrictions → Websites** to
+   `https://loganwestlake.github.io/*`, `http://localhost:*/*` and
+   `https://mono-music-c0b63.firebaseapp.com/*`.
 
 ## Spotify import setup
 

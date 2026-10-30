@@ -4,6 +4,7 @@ import {
   Heart,
   ListMusic,
   MicVocal,
+  MonitorSpeaker,
   PanelRight,
   PictureInPicture2,
   Repeat,
@@ -124,6 +125,7 @@ export default function PlayerBar({ docked }) {
         <div className="flex items-center justify-end gap-0.5">
           <AdChip />
           <IconButton icon={MicVocal} label="Lyrics (Y)" onClick={() => ui.setLyricsOpen(true)} size={16} className="h-9 w-9" />
+          <IconButton icon={MonitorSpeaker} label="Devices" onClick={() => ui.setDevicesOpen(true)} size={16} className="h-9 w-9" />
           <IconButton
             icon={ListMusic}
             label="Queue"

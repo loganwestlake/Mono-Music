@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Check, Download, ExternalLink, Keyboard, Upload } from 'lucide-react'
+import { Check, Download, ExternalLink, Keyboard, LogIn, MonitorSpeaker, Upload } from 'lucide-react'
 import { SHORTCUTS } from '../components/ShortcutsDialog'
 import { Eyebrow, PageTitle, PillButton } from '../components/ui'
 import { navigate } from '../lib/router'
 import { clearAll } from '../lib/storage'
 import { useLibrary } from '../store/library'
+import { useCloud } from '../store/cloud'
 import { useToast } from '../store/toast'
 import { useUi } from '../store/ui'
 
@@ -12,7 +13,8 @@ export default function SettingsView() {
   const library = useLibrary()
   const { profile, settings, updateProfile, updateSettings } = library
   const toast = useToast()
-  const { setShortcutsOpen, setImportOpen } = useUi()
+  const { setShortcutsOpen, setImportOpen, setDevicesOpen } = useUi()
+  const cloud = useCloud()
   const [name, setName] = useState(profile.name)
   const [key, setKey] = useState(settings.apiKey)
 
@@ -72,6 +74,40 @@ export default function SettingsView() {
       <PageTitle eyebrow="Preferences">
         Sett<span className="font-serif font-normal italic">ings</span>
       </PageTitle>
+
+      <Block title="Account & sync">
+        {cloud.user ? (
+          <>
+            <Row
+              title={cloud.user.displayName || cloud.user.email}
+              hint={`${cloud.user.email} · ${
+                cloud.syncState === 'error'
+                  ? 'Sync problem — check your connection'
+                  : cloud.syncState === 'syncing'
+                    ? 'Syncing…'
+                    : 'Playlists, likes and history are synced'
+              }`}
+            >
+              <PillButton variant="outline" onClick={cloud.signOut}>
+                Sign out
+              </PillButton>
+            </Row>
+            <PillButton variant="outline" icon={MonitorSpeaker} onClick={() => setDevicesOpen(true)}>
+              Devices
+            </PillButton>
+          </>
+        ) : (
+          <>
+            <p className="text-[13px] leading-relaxed text-neutral-500">
+              Sign in to keep your playlists, likes and history on every device, and to control music on one device
+              from another.
+            </p>
+            <PillButton icon={LogIn} onClick={cloud.signIn}>
+              Sign in with Google
+            </PillButton>
+          </>
+        )}
+      </Block>
 
       <Block title="Profile">
         <form onSubmit={saveProfile} className="flex gap-2">

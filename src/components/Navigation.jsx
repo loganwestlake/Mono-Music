@@ -7,7 +7,9 @@ import {
   History,
   Home,
   Library,
+  LogIn,
   Menu,
+  MonitorSpeaker,
   Plus,
   Search,
   Settings,
@@ -15,6 +17,7 @@ import {
 } from 'lucide-react'
 import { href, navigate } from '../lib/router'
 import { useLibrary } from '../store/library'
+import { useCloud } from '../store/cloud'
 import { useUi } from '../store/ui'
 import Artwork from './Artwork'
 
@@ -33,7 +36,8 @@ const LINKS = [
 /** Sidebar contents — shared by the desktop rail and the mobile drawer. */
 function NavContents({ path, onNavigate }) {
   const { playlists, liked, recent, createPlaylist } = useLibrary()
-  const { setImportOpen, setPaletteOpen } = useUi()
+  const { setImportOpen, setPaletteOpen, setDevicesOpen } = useUi()
+  const cloud = useCloud()
 
   const newPlaylist = () => {
     const id = createPlaylist(`Playlist ${playlists.length + 1}`)
@@ -123,12 +127,62 @@ function NavContents({ path, onNavigate }) {
         )}
       </ul>
 
-      <div className="border-t border-black/10 pt-3">
+      <div className="space-y-0.5 border-t border-black/10 pt-3">
+        <button
+          type="button"
+          onClick={() => {
+            onNavigate?.()
+            setDevicesOpen(true)
+          }}
+          className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-[13px] font-medium text-[#111]/70 transition-colors hover:bg-black/5 hover:text-[#111]"
+        >
+          <MonitorSpeaker size={15} strokeWidth={1.5} className="shrink-0" />
+          <span className="flex-1 text-left">Devices</span>
+          {cloud?.devices.some((d) => !d.me && d.online) && <span className="h-1.5 w-1.5 rounded-full bg-[#111]" />}
+        </button>
         <NavLink to="/settings" active={path === '/settings'} icon={Settings} small onClick={onNavigate}>
           Settings
         </NavLink>
+        <AccountRow onNavigate={onNavigate} />
       </div>
     </>
+  )
+}
+
+function AccountRow({ onNavigate }) {
+  const cloud = useCloud()
+  if (!cloud || cloud.user === undefined) return null
+  if (!cloud.user)
+    return (
+      <button
+        type="button"
+        onClick={cloud.signIn}
+        className="mt-1 flex w-full items-center gap-3 rounded-xl bg-[#111] px-3 py-2.5 text-[12px] font-semibold text-white"
+      >
+        <LogIn size={15} strokeWidth={1.5} />
+        Sign in to sync
+      </button>
+    )
+  return (
+    <a
+      href={href('/settings')}
+      onClick={onNavigate}
+      className="mt-1 flex items-center gap-3 rounded-xl px-3 py-2 hover:bg-black/5"
+    >
+      {cloud.user.photoURL ? (
+        <img src={cloud.user.photoURL} alt="" referrerPolicy="no-referrer" className="h-7 w-7 rounded-full grayscale" />
+      ) : (
+        <span className="grid h-7 w-7 place-items-center rounded-full bg-[#111] text-[11px] font-bold text-white">
+          {(cloud.user.displayName || cloud.user.email || '?')[0]}
+        </span>
+      )}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[12px] font-semibold">{cloud.user.displayName || cloud.user.email}</span>
+        <span className="block text-[10px] text-neutral-400">
+          {cloud.syncState === 'error' ? 'Sync problem' : cloud.syncState === 'syncing' ? 'Syncing…' : 'Synced'}
+        </span>
+      </span>
+    </a>
   )
 }
 

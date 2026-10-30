@@ -15,6 +15,7 @@ export function UiProvider({ children }) {
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
+  const [devicesOpen, setDevicesOpen] = useState(false)
 
   useEffect(() => save('ui', prefs), [prefs])
 
@@ -36,8 +37,10 @@ export function UiProvider({ children }) {
       setDrawerOpen,
       sheetOpen,
       setSheetOpen,
+      devicesOpen,
+      setDevicesOpen,
     }),
-    [prefs, lyricsOpen, importOpen, paletteOpen, shortcutsOpen, drawerOpen, sheetOpen],
+    [prefs, lyricsOpen, importOpen, paletteOpen, shortcutsOpen, drawerOpen, sheetOpen, devicesOpen],
   )
   return <UiContext.Provider value={value}>{children}</UiContext.Provider>
 }

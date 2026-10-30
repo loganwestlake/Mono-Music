@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Flame, Play, RefreshCw, Search, Sparkles } from 'lucide-react'
 import Artwork from '../components/Artwork'
+import { ElsewhereChip } from '../components/DevicesDialog'
 import TrackRow from '../components/TrackRow'
 import { Eyebrow, PillButton, Spinner } from '../components/ui'
 import { chartTracks, recommendations } from '../lib/deezer'
@@ -49,6 +50,7 @@ export default function HomeView() {
               <Flame size={10} /> {days}-day streak
             </span>
           )}
+          <ElsewhereChip />
           {listening.seconds > 60 && (
             <Eyebrow>
               {hours ? `${hours}h ` : ''}

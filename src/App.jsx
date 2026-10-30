@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { WifiOff } from 'lucide-react'
 import { AddToPlaylistProvider } from './components/AddToPlaylist'
 import CommandPalette from './components/CommandPalette'
+import DevicesDialog from './components/DevicesDialog'
 import ImportDialog from './components/ImportDialog'
 import { Drawer, MobileTopBar, Sidebar, TabBar } from './components/Navigation'
 import ShortcutsDialog from './components/ShortcutsDialog'
@@ -15,6 +16,7 @@ import NowPlaying from './player/NowPlaying'
 import PlayerBar from './player/PlayerBar'
 import { PlayerProvider, usePlayer } from './player/PlayerProvider'
 import { LibraryProvider, useLibrary } from './store/library'
+import { CloudProvider } from './store/cloud'
 import { ResolverProvider } from './store/resolver'
 import { ToastProvider, useToast } from './store/toast'
 import { UiProvider, useUi } from './store/ui'
@@ -35,11 +37,13 @@ export default function App() {
         <UiProvider>
           <ResolverProvider>
             <PlayerProvider>
-              <MiniWindowProvider>
-                <AddToPlaylistProvider>
-                  <Root />
-                </AddToPlaylistProvider>
-              </MiniWindowProvider>
+              <CloudProvider>
+                <MiniWindowProvider>
+                  <AddToPlaylistProvider>
+                    <Root />
+                  </AddToPlaylistProvider>
+                </MiniWindowProvider>
+              </CloudProvider>
             </PlayerProvider>
           </ResolverProvider>
         </UiProvider>
@@ -123,6 +127,7 @@ function Shell({ route }) {
       <ImportDialog open={ui.importOpen} onClose={() => ui.setImportOpen(false)} />
       <CommandPalette open={ui.paletteOpen} onClose={() => ui.setPaletteOpen(false)} />
       <ShortcutsDialog open={ui.shortcutsOpen} onClose={() => ui.setShortcutsOpen(false)} />
+      <DevicesDialog open={ui.devicesOpen} onClose={() => ui.setDevicesOpen(false)} />
     </div>
   )
 }

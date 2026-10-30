@@ -1,46 +1,92 @@
 /**
  * Lyrics from LRCLIB (https://lrclib.net) — free, no key, CORS-enabled.
- * Returns { lines: [{ at, text }], synced: boolean } or null.
+ *
+ * Timing matters: the same song exists in several versions (album, radio
+ * edit, music video with an intro…) and synced lyrics only line up with the
+ * version they were timed against. So we fetch every candidate once, then
+ * pick by the *actual* length of what's playing:
+ *   · synced lyrics within ±3s of the real duration → synced
+ *   · within ±10s → synced but flagged "approximate" (tap-to-sync helps)
+ *   · otherwise → shown unsynced rather than guessing
  */
 
 const cache = new Map()
 
-export async function fetchLyrics(track) {
-  if (!track || track.pending) return null
-  if (cache.has(track.id)) return cache.get(track.id)
-
-  const result = await lookup(track).catch(() => null)
-  cache.set(track.id, result)
-  return result
+/** All lyric candidates for a track (cached per track). */
+export function fetchCandidates(track) {
+  if (!track || track.pending) return Promise.resolve([])
+  if (!cache.has(track.id)) cache.set(track.id, lookup(track).catch(() => []))
+  return cache.get(track.id)
 }
 
-async function lookup({ title, artist, duration }) {
-  const byFields = new URLSearchParams({ track_name: title, artist_name: artist })
-  let hits = await search(byFields)
-  if (!hits.length) hits = await search(new URLSearchParams({ q: `${artist} ${title}` }))
-  if (!hits.length) return null
+/** Clean up YouTube-style titles: "Song (feat. X) [Remastered 2011]" → "Song". */
+export function cleanSongTitle(title = '') {
+  return title
+    .replace(/\s*[([](feat|ft|with|prod)\.?\s[^)\]]*[)\]]/gi, '')
+    .replace(/\s*[([][^)\]]*(remaster|version|edit|mix|audio|video|lyric|visuali[sz]er|explicit|clean|hd|4k)[^)\]]*[)\]]/gi, '')
+    .replace(/\s+-\s+(\d{4}\s+)?remaster(ed)?.*$/i, '')
+    .replace(/\s+(feat|ft)\.?\s.+$/i, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
 
-  // Prefer synced lyrics whose length matches the video.
-  const score = (h) =>
-    (h.syncedLyrics ? 0 : 1000) + (duration && h.duration ? Math.abs(h.duration - duration) : 0)
-  const best = [...hits].filter((h) => !h.instrumental).sort((a, b) => score(a) - score(b))[0]
-  if (!best) return null
+const mainArtist = (artist = '') => artist.split(/\s*(?:,|&|\bx\b|\bfeat\.?|\bft\.?|\bwith\b)\s*/i)[0].trim()
 
-  if (best.syncedLyrics) return { synced: true, lines: parseLrc(best.syncedLyrics) }
-  if (best.plainLyrics) {
-    return {
-      synced: false,
-      lines: best.plainLyrics.split('\n').map((text, i) => ({ at: i, text: text.trim() })).filter((l) => l.text),
+async function lookup({ title, artist }) {
+  const t = cleanSongTitle(title)
+  const a = mainArtist(artist)
+  const queries = [
+    new URLSearchParams({ track_name: t, artist_name: a }),
+    new URLSearchParams({ q: `${a} ${t}` }),
+    new URLSearchParams({ track_name: t }),
+  ]
+  const seen = new Set()
+  const out = []
+  for (const q of queries) {
+    for (const hit of await search(q)) {
+      if (seen.has(hit.id) || hit.instrumental) continue
+      seen.add(hit.id)
+      out.push(hit)
     }
+    if (out.some((h) => h.syncedLyrics)) break
   }
-  return null
+  // Keep only hits whose title actually matches what we asked for.
+  const want = t.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
+  return out.filter((h) => {
+    const got = cleanSongTitle(h.trackName || h.name || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
+    return got && (got.includes(want) || want.includes(got))
+  })
 }
 
 async function search(params) {
-  const res = await fetch(`https://lrclib.net/api/search?${params}`)
-  if (!res.ok) return []
-  const data = await res.json()
-  return Array.isArray(data) ? data : []
+  try {
+    const res = await fetch(`https://lrclib.net/api/search?${params}`)
+    if (!res.ok) return []
+    const data = await res.json()
+    return Array.isArray(data) ? data : []
+  } catch {
+    return []
+  }
+}
+
+/** Choose the best lyrics for what's actually playing (duration in seconds, 0 if unknown). */
+export function pickLyrics(candidates, duration) {
+  if (!candidates.length) return null
+  const synced = candidates.filter((h) => h.syncedLyrics)
+  const diff = (h) => (duration && h.duration ? Math.abs(h.duration - duration) : 0)
+  const best = [...synced].sort((a, b) => diff(a) - diff(b))[0]
+
+  if (best && (!duration || diff(best) <= 10)) {
+    return { synced: true, approx: !duration || diff(best) > 3, lines: parseLrc(best.syncedLyrics) }
+  }
+  const plain = [...candidates].filter((h) => h.plainLyrics).sort((a, b) => diff(a) - diff(b))[0]
+  const text = plain?.plainLyrics || best?.plainLyrics
+  if (!text) return null
+  return {
+    synced: false,
+    approx: false,
+    lines: text.split('\n').map((line, i) => ({ at: i, text: line.trim() })).filter((l) => l.text),
+  }
 }
 
 export function parseLrc(lrc) {

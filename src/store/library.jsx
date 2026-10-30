@@ -149,6 +149,19 @@ function reducer(state, action) {
     case 'resolveTrack':
       // An imported/recommended song was matched to a YouTube video.
       return mapTracks(state, (t) => (t.id === action.from ? { ...t, id: action.to, duration: t.duration || action.duration || 0 } : t))
+    case 'applyRemote': {
+      // Cloud data from another device; keep this device's private keys.
+      const next = { ...state, ...action.patch }
+      if (action.patch.settings)
+        next.settings = {
+          ...DEFAULT_SETTINGS,
+          ...action.patch.settings,
+          apiKey: state.settings.apiKey,
+          spotifyClientId: state.settings.spotifyClientId,
+        }
+      if (action.patch.listening) next.listening = { ...state.listening, ...action.patch.listening }
+      return next
+    }
     case 'replace':
       return { ...INITIAL, ...action.state, settings: { ...DEFAULT_SETTINGS, ...action.state.settings } }
     case 'reset':
@@ -208,6 +221,7 @@ export function LibraryProvider({ children }) {
       setPlaylistTracks: (id, tracks) => dispatch({ type: 'setPlaylistTracks', id, tracks }),
       resolveTrack: (from, to, duration) => dispatch({ type: 'resolveTrack', from, to, duration }),
       replaceAll: (next) => dispatch({ type: 'replace', state: next }),
+      applyRemote: (patch) => dispatch({ type: 'applyRemote', patch }),
       reset: () => dispatch({ type: 'reset' }),
     }),
     [],

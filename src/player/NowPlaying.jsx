@@ -11,6 +11,7 @@ import {
   Maximize2,
   MicVocal,
   MonitorPlay,
+  MonitorSpeaker,
   Moon,
   Pause,
   PictureInPicture2,
@@ -41,7 +42,7 @@ import { useUi } from '../store/ui'
 import { AdChip } from './PlayerBar'
 import { useMiniWindow } from './MiniWindow'
 import { usePlayer, usePlayerTime } from './PlayerProvider'
-import { activeLineIndex, useLyrics } from './useLyrics'
+import { activeLineIndex, useLyrics, useTrackOffset } from './useLyrics'
 
 /**
  * The "Now Playing" view. Rendered exactly once for the app's lifetime
@@ -207,7 +208,7 @@ function MobileTrackInfo({ track }) {
 
 /** Art / Video switch, fullscreen, lyrics, and pop-out mini player. */
 function Toolbar({ stageRef, mobile }) {
-  const { viewMode, setViewMode, setLyricsOpen } = useUi()
+  const { viewMode, setViewMode, setLyricsOpen, setDevicesOpen } = useUi()
   const mini = useMiniWindow()
   const p = usePlayer()
 
@@ -244,6 +245,13 @@ function Toolbar({ stageRef, mobile }) {
       {viewMode === 'video' && (
         <IconButton icon={Expand} label="Full screen" onClick={fullscreen} size={16} className="h-9 w-9" disabled={!p.current} />
       )}
+      <IconButton
+        icon={MonitorSpeaker}
+        label="Devices"
+        onClick={() => setDevicesOpen(true)}
+        size={mobile ? 18 : 16}
+        className={mobile ? 'h-10 w-10' : 'h-9 w-9'}
+      />
       <IconButton
         icon={MicVocal}
         label="Lyrics"
@@ -451,11 +459,12 @@ export function VolumeControl({ className = 'mt-4 hidden w-full max-w-[220px] it
 function Lyrics({ track }) {
   const { loading, lines: all, synced } = useLyrics(track)
   const { time } = usePlayerTime()
+  const offset = useTrackOffset(track)
   const { setLyricsOpen } = useUi()
   if (!track) return null
 
   const lines = all.filter((l) => l.text)
-  const current = synced ? activeLineIndex(lines, time) : -1
+  const current = synced ? activeLineIndex(lines, time + offset.total) : -1
   const preview = synced ? lines.slice(Math.max(0, current), Math.max(0, current) + 3) : lines.slice(0, 3)
 
   return (

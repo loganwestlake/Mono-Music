@@ -9,7 +9,7 @@ import { useToast } from '../store/toast'
 import { useUi } from '../store/ui'
 import { PlayButton } from './NowPlaying'
 import { usePlayer, usePlayerTime } from './PlayerProvider'
-import { activeLineIndex, useLyrics } from './useLyrics'
+import { activeLineIndex, useLyrics, useTrackOffset } from './useLyrics'
 
 /**
  * Pop-out mini player: a small always-on-top window (Document
@@ -153,7 +153,8 @@ function MiniPlayerWindow({ onClose }) {
 function CurrentLine({ track }) {
   const { lines, synced } = useLyrics(track)
   const { time } = usePlayerTime()
-  const text = synced ? lines[activeLineIndex(lines, time)]?.text : null
+  const offset = useTrackOffset(track)
+  const text = synced ? lines[activeLineIndex(lines, time + offset.total)]?.text : null
   return (
     <p className="mt-2 h-5 truncate text-center text-[12px] font-semibold tracking-tight text-[#111]/70">{text || ' '}</p>
   )

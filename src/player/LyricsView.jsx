@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { ChevronDown, Minus, Plus, SkipBack, SkipForward, Timer, Type } from 'lucide-react'
+import { ChevronDown, Crosshair, Minus, Plus, SkipBack, SkipForward, Timer, Type } from 'lucide-react'
 import Artwork from '../components/Artwork'
 import Scrubber from '../components/Scrubber'
 import { IconButton } from '../components/ui'
 import { artUrl } from '../lib/tracks'
 import { useLibrary } from '../store/library'
+import { useToast } from '../store/toast'
 import { PlayButton } from './NowPlaying'
 import { usePlayer, usePlayerTime } from './PlayerProvider'
-import { activeLineIndex, useLyrics } from './useLyrics'
+import { activeLineIndex, useLyrics, useTrackOffset } from './useLyrics'
 
 /**
  * Full-screen, Apple Music–style lyrics.
@@ -24,6 +25,7 @@ export default function LyricsView({ open, onClose }) {
   const p = usePlayer()
   const track = p.current
   const [chrome, setChrome] = useState(true)
+  const [syncMode, setSyncMode] = useState(false)
   const idle = useRef()
 
   const wake = useCallback(() => {
@@ -46,7 +48,7 @@ export default function LyricsView({ open, onClose }) {
     }
   }, [open, onClose, wake])
 
-  const showChrome = chrome || !p.playing
+  const showChrome = chrome || !p.playing || syncMode
 
   return (
     <AnimatePresence>
@@ -107,10 +109,10 @@ export default function LyricsView({ open, onClose }) {
                 animate={{ opacity: showChrome ? 1 : 0 }}
                 transition={{ duration: 0.6 }}
               >
-                <Tweaks />
+                <Tweaks track={track} syncMode={syncMode} setSyncMode={setSyncMode} />
                 <IconButton icon={ChevronDown} label="Close lyrics (Esc)" tone="light" onClick={onClose} />
               </motion.div>
-              <LyricsBody track={track} />
+              <LyricsBody track={track} syncMode={syncMode} setSyncMode={setSyncMode} />
             </section>
 
             <motion.footer
@@ -119,7 +121,7 @@ export default function LyricsView({ open, onClose }) {
               transition={{ duration: 0.6 }}
             >
               <div className="flex justify-center">
-                <Tweaks />
+                <Tweaks track={track} syncMode={syncMode} setSyncMode={setSyncMode} />
               </div>
               <Transport />
             </motion.footer>
@@ -153,13 +155,14 @@ function Transport() {
   )
 }
 
-/** Text size and timing, adjustable without leaving the view. */
-function Tweaks() {
+/** Text size, timing for this song, and tap-to-sync — without leaving the view. */
+function Tweaks({ track, syncMode, setSyncMode }) {
   const { settings, updateSettings } = useLibrary()
+  const offset = useTrackOffset(track)
   const pill = 'flex items-center gap-1 rounded-full bg-white/10 p-0.5 backdrop-blur'
   const btn = 'grid h-7 w-7 place-items-center rounded-full text-white/80 hover:bg-white/15 hover:text-white'
   return (
-    <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest">
+    <div className="flex flex-wrap items-center justify-center gap-2 text-[10px] font-bold uppercase tracking-widest">
       <div className={pill} title="Text size">
         <button type="button" className={btn} aria-label="Smaller text" onClick={() => updateSettings({ lyricsSize: Math.max(0.7, +(settings.lyricsSize - 0.1).toFixed(1)) })}>
           <Minus size={12} />
@@ -169,19 +172,33 @@ function Tweaks() {
           <Plus size={12} />
         </button>
       </div>
-      <div className={pill} title="Lyrics timing">
-        <button type="button" className={btn} aria-label="Lyrics earlier" onClick={() => updateSettings({ lyricsOffset: +(settings.lyricsOffset - 0.5).toFixed(1) })}>
+      <div className={pill} title="Timing for this song">
+        <button type="button" className={btn} aria-label="Lyrics earlier" onClick={() => offset.set(offset.own + 0.3)}>
           <Minus size={12} />
         </button>
         <span className="flex items-center gap-1 px-1 text-white/60 tabular-nums">
           <Timer size={12} />
-          {settings.lyricsOffset > 0 ? '+' : ''}
-          {settings.lyricsOffset.toFixed(1)}
+          {offset.own > 0 ? '+' : ''}
+          {offset.own.toFixed(1)}s
         </span>
-        <button type="button" className={btn} aria-label="Lyrics later" onClick={() => updateSettings({ lyricsOffset: +(settings.lyricsOffset + 0.5).toFixed(1) })}>
+        <button type="button" className={btn} aria-label="Lyrics later" onClick={() => offset.set(offset.own - 0.3)}>
           <Plus size={12} />
         </button>
       </div>
+      <button
+        type="button"
+        onClick={() => setSyncMode(!syncMode)}
+        className={`flex h-8 items-center gap-1.5 rounded-full px-3 backdrop-blur transition ${
+          syncMode ? 'bg-white text-[#111]' : 'bg-white/10 text-white/80 hover:bg-white/15'
+        }`}
+      >
+        <Crosshair size={12} /> {syncMode ? 'Tap the line being sung' : 'Sync'}
+      </button>
+      {offset.own !== 0 && !syncMode && (
+        <button type="button" onClick={() => offset.set(0)} className="h-8 rounded-full px-2 text-white/50 hover:text-white">
+          Reset
+        </button>
+      )}
     </div>
   )
 }
@@ -213,9 +230,19 @@ function Backdrop({ track }) {
   )
 }
 
-function LyricsBody({ track }) {
-  const { loading, lines, synced } = useLyrics(track)
+function LyricsBody({ track, syncMode, setSyncMode }) {
+  const { loading, lines, synced, approx } = useLyrics(track)
   const { settings } = useLibrary()
+  const offset = useTrackOffset(track)
+  const { getTime } = usePlayer()
+  const toast = useToast()
+
+  // Tap-to-sync: the tapped line is the one being sung right now.
+  const syncTo = (line) => {
+    offset.set(line.at - getTime() - (settings.lyricsOffset || 0))
+    setSyncMode(false)
+    toast('Lyrics synced for this song')
+  }
 
   let message = null
   if (!track) message = 'Play a song to see its lyrics.'
@@ -235,7 +262,14 @@ function LyricsBody({ track }) {
     )
 
   return synced ? (
-    <SyncedLyrics lines={lines} size={settings.lyricsSize} offset={settings.lyricsOffset} />
+    <>
+      {(approx || syncMode) && offset.own === 0 && (
+        <p className="absolute top-3 left-5 z-10 rounded-full bg-white/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-white/70 backdrop-blur lg:left-0">
+          {syncMode ? 'Tap the line that’s being sung now' : 'Timing may be off for this version — tap Sync'}
+        </p>
+      )}
+      <SyncedLyrics lines={lines} size={settings.lyricsSize} offset={offset.total} onPick={syncMode ? syncTo : null} />
+    </>
   ) : (
     <PlainLyrics lines={lines} size={settings.lyricsSize} />
   )
@@ -272,7 +306,7 @@ const EASE = 'cubic-bezier(0.2, 0.9, 0.25, 1)'
  *  · Line movement is a CSS transform transition (GPU), staggered with
  *    transition-delay for the cascade. Soft blur only on desktop.
  */
-function SyncedLyrics({ lines: raw, size, offset }) {
+function SyncedLyrics({ lines: raw, size, offset, onPick }) {
   const { seek, getTime } = usePlayer()
   const reduceMotion = useReducedMotion()
 
@@ -348,7 +382,8 @@ function SyncedLyrics({ lines: raw, size, offset }) {
     clearTimeout(idleTimer.current)
     setBrowsing(false)
     setOffsetY(0)
-    seek(Math.max(0, line.at - offset))
+    if (onPick) onPick(line)
+    else seek(Math.max(0, line.at - offset))
   }
 
   return (

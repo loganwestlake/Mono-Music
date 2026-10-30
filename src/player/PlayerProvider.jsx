@@ -646,6 +646,21 @@ export function PlayerProvider({ children }) {
     [shuffle, restartCurrent],
   )
 
+  /** Start a list at a given position (used when moving playback between devices). */
+  const playFrom = useCallback(
+    (tracks, index = 0, time = 0) => {
+      if (!tracks.length) return
+      resumeAtRef.current = Math.max(0, time)
+      loadedKeyRef.current = null
+      wantPlayRef.current = true
+      errorStreakRef.current = 0
+      setOriginal(null)
+      setQueue(tracks)
+      setIndex(index)
+    },
+    [],
+  )
+
   const playTrack = useCallback(
     (track) => {
       wantPlayRef.current = true
@@ -886,6 +901,7 @@ export function PlayerProvider({ children }) {
       sleep,
       playTracks,
       playTrack,
+      playFrom,
       playNext,
       enqueue,
       startRadio,
@@ -899,6 +915,7 @@ export function PlayerProvider({ children }) {
       setRate,
       setSleep,
       needsTap,
+      duration: duration || current?.duration || 0,
       loading: !!ad || resolving || (buffering && wantPlayRef.current),
       jump,
       removeAt,
@@ -909,8 +926,8 @@ export function PlayerProvider({ children }) {
       videoPictureInPicture,
     }),
     [engine, hasVideo, status, error, resolving, queue, index, current, playing, buffering, shuffle, repeat, volume,
-      muted, rate, sleep, playTracks, playTrack, playNext, enqueue, startRadio, toggle, next, prev, seek, getTime,
-      setVolume, toggleMute, setRate, setSleep, needsTap, ad, jump, removeAt, setUpcoming, clearUpcoming, toggleShuffle,
+      muted, rate, sleep, playTracks, playTrack, playFrom, playNext, enqueue, startRadio, toggle, next, prev, seek, getTime,
+      setVolume, toggleMute, setRate, setSleep, needsTap, ad, duration, jump, removeAt, setUpcoming, clearUpcoming, toggleShuffle,
       cycleRepeat, videoPictureInPicture],
   )
 
