@@ -29,12 +29,26 @@ const STATIC_INVIDIOUS = [
 ]
 
 const HEALTH_KEY = 'mono:v1:instance-health'
+const DEAD_KEY = 'mono:v1:instance-dead'
 const DIRECTORY_KEY = 'mono:v1:instance-directory'
 const DIRECTORY_TTL = 6 * 60 * 60 * 1000
+const DEAD_FOR = 12 * 60 * 60 * 1000
 
 let health = readJson(HEALTH_KEY, {}) // base → score (successes − failures, decayed)
+let dead = readJson(DEAD_KEY, {}) // base → time until which it's skipped
 let directory = readJson(DIRECTORY_KEY, null)
 let discovering = null
+
+/**
+ * Your own Mono proxy (a free Cloudflare Worker — see /worker). Public
+ * servers mostly refuse requests from other websites (CORS); the proxy asks
+ * them server-side instead. When set, it's the only server we talk to.
+ */
+let proxy = ''
+export function setProxy(url = '') {
+  proxy = url.trim().replace(/\/+$/, '')
+}
+export const hasProxy = () => !!proxy
 
 function readJson(key, fallback) {
   try {
@@ -52,11 +66,22 @@ function writeJson(key, value) {
   }
 }
 
-export function reportInstance(base, ok) {
+/**
+ * Record how a server did. A TypeError from fetch means the browser refused
+ * the response (CORS) or the server is unreachable — skip it for 12 hours
+ * instead of hitting it on every song.
+ */
+export function reportInstance(base, ok, err) {
+  if (base.startsWith(proxy) && proxy) return
   const prev = health[base] ?? 0
   health[base] = Math.max(-10, Math.min(10, prev * 0.9 + (ok ? 2 : -3)))
   writeJson(HEALTH_KEY, health)
+  if (ok && dead[base]) delete dead[base]
+  if (!ok && err?.name === 'TypeError') dead[base] = Date.now() + DEAD_FOR
+  writeJson(DEAD_KEY, dead)
 }
+
+const alive = (base) => !(dead[base] > Date.now())
 
 async function fetchJson(url, ms) {
   const ctrl = new AbortController()
@@ -100,15 +125,17 @@ function discover() {
 const byHealth = (list) =>
   [...new Set(list)].sort((a, b) => (health[b] ?? 0) - (health[a] ?? 0))
 
-/** Instances ordered healthiest-first. Kicks off discovery in the background. */
+/** Instances ordered healthiest-first, minus ones that refused us recently. */
 export function pipedInstances() {
+  if (proxy) return [`${proxy}/piped`]
   discover().catch(() => {})
-  return byHealth([...STATIC_PIPED, ...(directory?.piped ?? [])])
+  return byHealth([...STATIC_PIPED, ...(directory?.piped ?? [])]).filter(alive)
 }
 
 export function invidiousInstances() {
+  if (proxy) return [`${proxy}/inv`]
   discover().catch(() => {})
-  return byHealth([...STATIC_INVIDIOUS, ...(directory?.invidious ?? [])])
+  return byHealth([...STATIC_INVIDIOUS, ...(directory?.invidious ?? [])]).filter(alive)
 }
 
 export { fetchJson }

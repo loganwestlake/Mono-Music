@@ -1,4 +1,4 @@
-import { fetchJson, invidiousInstances, pipedInstances, reportInstance } from './instances'
+import { fetchJson, hasProxy, invidiousInstances, pipedInstances, reportInstance } from './instances'
 
 /**
  * Ad-free playback source. Asks public Piped / Invidious instances for a
@@ -41,7 +41,14 @@ export function forgetStream(id) {
   cache.delete(`${id}|v`)
 }
 
+// When every public server refuses the browser (CORS), stop asking for a
+// while so songs go straight to the fallback instead of waiting.
+let blockedUntil = 0
+
 async function race(id, exclude, preferAudio) {
+  if (!hasProxy() && Date.now() < blockedUntil) throw new Error('Public servers are blocking this site')
+  let refused = 0
+  let tried = 0
   const piped = pipedInstances().filter((b) => !exclude.includes(b))
   const inv = invidiousInstances().filter((b) => !exclude.includes(b))
   // Interleave so each wave mixes both kinds of server.
@@ -63,7 +70,9 @@ async function race(id, exclude, preferAudio) {
               return { ...r, base }
             },
             (err) => {
-              reportInstance(base, false)
+              tried++
+              if (err?.name === 'TypeError') refused++
+              reportInstance(base, false, err)
               throw err
             },
           ),
@@ -77,6 +86,7 @@ async function race(id, exclude, preferAudio) {
       // whole wave failed — next wave
     }
   }
+  if (!hasProxy() && tried > 0 && refused >= tried * 0.8) blockedUntil = Date.now() + 10 * 60 * 1000
   throw new Error('No ad-free source available')
 }
 

@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { describePlayerError, loadYouTubeApi, PLAYER_VARS } from '../lib/youtube'
 import { artistRadio } from '../lib/deezer'
 import { load, save } from '../lib/storage'
+import { hasProxy } from '../lib/instances'
 import { forgetStream, prefetchStream, resolveStream } from '../lib/streams'
 import { isUnresolved, parseVideoTitle, shuffled, thumbUrl } from '../lib/tracks'
 import { useLibrary } from '../store/library'
@@ -463,7 +464,15 @@ export function PlayerProvider({ children }) {
     setError('YouTube couldn’t load. It may be blocked on this network, by your school/work device, or by an ad-blocker.')
   }
 
+  const tippedRef = useRef(false)
   function fallbackToYouTube(start) {
+    // Public servers refuse requests from websites (CORS). One gentle tip.
+    if (!hasProxy() && !tippedRef.current) {
+      tippedRef.current = true
+      toast('Ad-free servers are blocking browsers. Set up your free ad-free server to fix it.', {
+        action: { label: 'How', run: () => (window.location.hash = '/settings') },
+      })
+    }
     loadYouTube(start)
   }
 

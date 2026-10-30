@@ -40,6 +40,19 @@ A strictly monochrome, editorial music player that uses YouTube as a hidden engi
 - Editorial monochrome design, dark mode (D), command palette (⌘K), keyboard shortcuts (?),
   installable app that opens offline
 
+## Ad-free server (free Cloudflare Worker) — needed for ad-free playback
+
+Public Piped / Invidious servers refuse requests from other websites (CORS), so a browser can't use
+them directly. [`worker/mono-proxy.js`](worker/mono-proxy.js) is a tiny relay you run for free on
+Cloudflare: it asks those servers server-side and returns the answer to your site. No keys, no secrets,
+read-only endpoints only, answers cached for 10 minutes.
+
+1. Sign up at https://dash.cloudflare.com (free).
+2. **Workers & Pages → Create → Create Worker** → keep "Hello World" → **Deploy**.
+3. **Edit code** → replace everything with `worker/mono-proxy.js` (Mono → Settings → *Copy worker code*) → **Deploy**.
+4. Paste the worker address (`https://….workers.dev`) in **Mono → Settings → Ad-free server** → Save.
+   It syncs to your other signed-in devices.
+
 ## Firebase setup (accounts, sync, devices)
 
 The Firebase web config in `src/lib/firebase.js` is **not a secret** — Firebase web configs are public

@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Check, Download, ExternalLink, Keyboard, LogIn, MonitorSpeaker, Upload } from 'lucide-react'
+import workerCode from '../../worker/mono-proxy.js?raw'
+import { Check, Copy, Download, ExternalLink, Keyboard, LogIn, MonitorSpeaker, Upload } from 'lucide-react'
 import { SHORTCUTS } from '../components/ShortcutsDialog'
 import { Eyebrow, PageTitle, PillButton } from '../components/ui'
 import { navigate } from '../lib/router'
@@ -129,6 +130,10 @@ export default function SettingsView() {
         </Row>
       </Block>
 
+      <Block title="Ad-free server">
+        <ProxySetup />
+      </Block>
+
       <Block title="Playback">
         <Row
           title="Ad-free playback"
@@ -246,6 +251,106 @@ export default function SettingsView() {
         </p>
       </Block>
     </div>
+  )
+}
+
+/**
+ * Public ad-free servers block requests from websites (CORS), so the
+ * listener deploys a tiny free Cloudflare Worker that asks on their behalf.
+ */
+function ProxySetup() {
+  const { settings, updateSettings } = useLibrary()
+  const toast = useToast()
+  const [url, setUrl] = useState(settings.proxyUrl)
+  const [status, setStatus] = useState(null) // null | testing | ok | fail
+  const [copied, setCopied] = useState(false)
+
+  const test = async (value) => {
+    const base = value.trim().replace(/\/+$/, '')
+    if (!base) return
+    setStatus('testing')
+    try {
+      const ping = await fetch(`${base}/`).then((r) => r.json())
+      if (ping?.name !== 'mono-proxy') throw new Error()
+      const res = await fetch(`${base}/piped/streams/dQw4w9WgXcQ`)
+      setStatus(res.ok ? 'ok' : 'partial')
+    } catch {
+      setStatus('fail')
+    }
+  }
+
+  const save = (e) => {
+    e.preventDefault()
+    const clean = url.trim().replace(/\/+$/, '')
+    if (clean && !/^https:\/\//.test(clean)) return toast('The address should start with https://')
+    updateSettings({ proxyUrl: clean })
+    toast(clean ? 'Ad-free server saved — syncs to your other devices' : 'Ad-free server removed')
+    if (clean) test(clean)
+  }
+
+  return (
+    <>
+      <p className="text-[13px] leading-relaxed text-neutral-500">
+        The free ad-free music servers refuse requests from websites, so songs fall back to YouTube (and its ads).
+        Fix it once with your own free relay — about 5 minutes, no coding:
+      </p>
+      <ol className="list-decimal space-y-2 pl-5 text-[13px] leading-relaxed text-neutral-600">
+        <li>
+          Make a free account at{' '}
+          <a className="font-semibold text-[#111] underline" href="https://dash.cloudflare.com/sign-up" target="_blank" rel="noreferrer">
+            Cloudflare
+          </a>
+          .
+        </li>
+        <li>
+          Go to <b>Workers &amp; Pages → Create → Create Worker</b>, keep the “Hello World” example and press{' '}
+          <b>Deploy</b>.
+        </li>
+        <li>
+          Press <b>Edit code</b>, delete everything, paste the Mono code, and press <b>Deploy</b>:
+          <button
+            type="button"
+            onClick={() => {
+              navigator.clipboard?.writeText(workerCode)
+              setCopied(true)
+              toast('Worker code copied')
+            }}
+            className="mt-2 flex items-center gap-2 rounded-full border border-black/15 bg-white px-4 py-2 text-[11px] font-bold uppercase tracking-widest text-[#111]"
+          >
+            {copied ? <Check size={13} /> : <Copy size={13} />} Copy worker code
+          </button>
+        </li>
+        <li>Copy your worker’s address (like https://mono.yourname.workers.dev) and paste it here:</li>
+      </ol>
+      <form onSubmit={save} className="flex gap-2">
+        <Input value={url} onChange={setUrl} placeholder="https://….workers.dev" />
+        <PillButton type="submit" icon={Check}>
+          Save
+        </PillButton>
+      </form>
+      {settings.proxyUrl && (
+        <div className="flex items-center gap-3 text-[12px]">
+          <button
+            type="button"
+            onClick={() => test(settings.proxyUrl)}
+            className="text-[10px] font-bold uppercase tracking-widest text-neutral-400 hover:text-[#111]"
+          >
+            Test connection
+          </button>
+          <span className="text-neutral-500">
+            {status === 'testing'
+              ? 'Testing…'
+              : status === 'ok'
+                ? '✓ Working — ad-free playback is on'
+                : status === 'partial'
+                  ? 'Connected, but the music servers are busy right now — try again shortly'
+                  : status === 'fail'
+                    ? '✕ Can’t reach it — check the address and that you pressed Deploy'
+                    : ''}
+          </span>
+        </div>
+      )}
+    </>
   )
 }
 

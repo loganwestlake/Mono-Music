@@ -102,7 +102,7 @@ export async function raceInstances(makePiped, makeInvidious, { wave = 3, waves 
               return { value, base }
             },
             (err) => {
-              reportInstance(base, false)
+              reportInstance(base, false, err)
               throw err
             },
           ),

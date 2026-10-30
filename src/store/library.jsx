@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer } from 'react'
+import { setProxy } from '../lib/instances'
 import { load, save } from '../lib/storage'
 
 /**
@@ -16,6 +17,7 @@ export const DEFAULT_SETTINGS = {
   spotifyClientId: '',
   lyricsSize: 1, // 0.8 – 1.3
   lyricsOffset: 0, // seconds, to fix out-of-sync lyrics
+  proxyUrl: '', // your Mono proxy (Cloudflare Worker) for ad-free playback + search
 }
 
 const INITIAL = {
@@ -193,6 +195,9 @@ export function LibraryProvider({ children }) {
     document.documentElement.classList.toggle('theme-dark', state.settings.theme === 'dark')
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', state.settings.theme === 'dark' ? '#0D0D0D' : '#F2F2F2')
   }, [state.settings.theme])
+
+  // Route ad-free + search requests through the listener's own proxy, if set.
+  setProxy(state.settings.proxyUrl)
 
   const isLiked = useCallback((id) => state.liked.some((t) => t.id === id), [state.liked])
 
