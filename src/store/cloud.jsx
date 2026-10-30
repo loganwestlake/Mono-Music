@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { collection, deleteDoc, doc, onSnapshot, setDoc } from 'firebase/firestore'
+import { collection, deleteDoc, doc, onSnapshot, serverTimestamp, setDoc } from 'firebase/firestore'
 import { db, onAuth, signInWithGoogle, signOut } from '../lib/firebase'
 import { PlayerContext, TimeContext, usePlayer } from '../player/PlayerProvider'
 import { useLibrary } from './library'
@@ -24,6 +24,17 @@ export const CloudContext = Ctx
 const LOCAL_ONLY_SETTINGS = ['apiKey', 'spotifyClientId']
 const ONLINE_MS = 70_000
 const HEARTBEAT_MS = 15_000
+const COMMAND_TTL_MS = 60_000
+const ACK_MS = 5000 // a device that hasn't picked up a command by now isn't responding
+
+/* ── shared clock ─────────────────────────────────────────────────────
+ * Device clocks are often minutes apart (TVs especially). Every time that
+ * crosses devices — "last seen", playback position, command age — uses the
+ * Firestore server's clock, estimated from our own presence writes. */
+let clockOffset = 0 // server time − local time, ms
+let clockKnown = false
+export const serverNow = () => Date.now() + clockOffset
+const millis = (ts) => (ts && typeof ts.toMillis === 'function' ? ts.toMillis() : null)
 
 /* ── helpers ────────────────────────────────────────────────────────── */
 
@@ -291,12 +302,14 @@ export function CloudProvider({ children }) {
           id: myId,
           name: myName,
           kind,
-          lastSeen: Date.now(),
+          lastSeen: serverNow(),
+          localAt: Date.now(),
+          serverAt: serverTimestamp(),
           state: {
             track: strip(p.current) || null,
             playing: p.playing,
             position: p.getTime(),
-            at: Date.now(),
+            at: serverNow(),
             volume: p.volume,
             shuffle: p.shuffle,
             repeat: p.repeat,
@@ -337,6 +350,13 @@ export function CloudProvider({ children }) {
   useEffect(() => {
     if (!user) return setDevices([])
     return onSnapshot(collection(db, 'users', user.uid, 'devices'), (snap) => {
+      const mine = snap.docs.find((d) => d.id === myId)
+      const serverAt = mine && !mine.metadata.hasPendingWrites ? millis(mine.data().serverAt) : null
+      if (serverAt && mine.data().localAt) {
+        // The write took a moment to reach the server; that's well under a second.
+        clockOffset = serverAt - mine.data().localAt
+        clockKnown = true
+      }
       setDevices(snap.docs.map((d) => d.data()))
     })
   }, [user, myId])
@@ -348,12 +368,17 @@ export function CloudProvider({ children }) {
     const handled = new Set()
     return onSnapshot(collection(db, 'users', user.uid, 'devices', myId, 'commands'), (snap) => {
       const fresh = snap.docs
-        .map((d) => d.data())
+        .map((d) => d.data({ serverTimestamps: 'estimate' }))
         .filter((c) => c?.id && !handled.has(c.id))
-        .sort((a, b) => a.at - b.at)
+        .sort((a, b) => (millis(a.ts) ?? a.at) - (millis(b.ts) ?? b.at))
       for (const cmd of fresh) {
         handled.add(cmd.id)
-        if (Date.now() - cmd.at < 60_000) run(cmd)
+        // Skip leftovers from long ago (e.g. this device was asleep). Age is
+        // measured on the server's clock, so a wrong device clock can't drop
+        // fresh commands; until we know the offset, trust the command.
+        const sent = millis(cmd.ts)
+        const stale = clockKnown && sent != null && serverNow() - sent > COMMAND_TTL_MS
+        if (!stale) run(cmd)
         deleteDoc(doc(db, 'users', user.uid, 'devices', myId, 'commands', cmd.id)).catch(() => {})
       }
     })
@@ -393,8 +418,8 @@ export function CloudProvider({ children }) {
       case 'playFrom':
         if (cmd.payload?.tracks?.length) {
           // Account for the time the command spent in flight (Play everywhere).
-          const late = cmd.payload.sentAt ? Math.max(0, (Date.now() - cmd.payload.sentAt) / 1000) : 0
-          p.playFrom(cmd.payload.tracks, cmd.payload.index || 0, (cmd.payload.time || 0) + (cmd.payload.sentAt ? late : 0))
+          const late = cmd.payload.sentAt ? Math.min(10, Math.max(0, (serverNow() - cmd.payload.sentAt) / 1000)) : 0
+          p.playFrom(cmd.payload.tracks, cmd.payload.index || 0, (cmd.payload.time || 0) + late)
           if (!cmd.payload.quiet) toast(`Playing here${from}`)
         }
         break
@@ -422,16 +447,47 @@ export function CloudProvider({ children }) {
   publishRef.current = publish
 
   /* ── public API ─────────────────────────────────────────────────── */
+  /**
+   * Send a command to another device. Resolves true once that device has
+   * picked it up (it deletes the command), false if it doesn't within ACK_MS.
+   */
   const sendCommand = useCallback(
     (targetId, type, payload) => {
-      if (!user) return
-      const cmd = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type, at: Date.now(), from: myId, fromName: myName }
+      if (!user) return Promise.resolve(false)
+      const cmd = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        type,
+        at: serverNow(),
+        ts: serverTimestamp(),
+        from: myId,
+        fromName: myName,
+      }
       if (payload !== undefined) cmd.payload = payload
-      setDoc(doc(db, 'users', user.uid, 'devices', targetId, 'commands', cmd.id), cmd).catch(() =>
-        toast('Couldn’t reach that device.'),
-      )
+      const ref = doc(db, 'users', user.uid, 'devices', targetId, 'commands', cmd.id)
+      return new Promise((resolve) => {
+        let seen = false
+        let done = false
+        let unsub = () => {}
+        const finish = (ok) => {
+          if (done) return
+          done = true
+          clearTimeout(timer)
+          unsub()
+          resolve(ok)
+        }
+        const timer = setTimeout(() => finish(false), ACK_MS)
+        unsub = onSnapshot(
+          ref,
+          (snap) => {
+            if (snap.exists()) seen = true
+            else if (seen) finish(true)
+          },
+          () => finish(false),
+        )
+        setDoc(ref, cmd).catch(() => finish(false))
+      })
     },
-    [user, myId, myName, toast],
+    [user, myId, myName],
   )
 
   /** Move what's playing here onto another device. */
@@ -439,13 +495,17 @@ export function CloudProvider({ children }) {
     (target) => {
       const p = playerRef.current
       if (!p.current) return
+      toast(`Sending to ${target.name}…`)
       sendCommand(target.id, 'playFrom', {
         tracks: p.queue.slice(p.index, p.index + 50).map(strip),
         index: 0,
         time: p.getTime(),
+      }).then((ok) => {
+        if (!ok) return toast(`${target.name} isn’t responding. Kept playing here.`)
+        // Hand over only once the other device has it.
+        if (playerRef.current.playing) playerRef.current.toggle()
+        toast(`Playing on ${target.name}`)
       })
-      if (p.playing) p.toggle()
-      toast(`Playing on ${target.name}`)
     },
     [sendCommand, toast],
   )
@@ -455,7 +515,7 @@ export function CloudProvider({ children }) {
     (source) => {
       const s = source.state
       if (!s?.track) return
-      const elapsed = s.playing ? (Date.now() - s.at) / 1000 : 0
+      const elapsed = s.playing ? Math.max(0, (serverNow() - s.at) / 1000) : 0
       const tracks = s.queue?.length ? s.queue : [s.track]
       playerRef.current.playFrom(tracks, 0, (s.position || 0) + elapsed)
       if (s.playing) sendCommand(source.id, 'pause')
@@ -471,7 +531,7 @@ export function CloudProvider({ children }) {
    */
   const playEverywhere = useCallback(() => {
     const p = playerRef.current
-    const online = devicesRef.current.filter((d) => d.id !== myId && Date.now() - (d.lastSeen || 0) < ONLINE_MS)
+    const online = devicesRef.current.filter((d) => d.id !== myId && Math.abs(serverNow() - (d.lastSeen || 0)) < ONLINE_MS)
     let tracks
     let time
     if (p.current) {
@@ -481,9 +541,9 @@ export function CloudProvider({ children }) {
       const src = online.find((d) => d.state?.playing && d.state.track) || online.find((d) => d.state?.track)
       if (!src) return toast('Play something first, then press Play everywhere.')
       tracks = src.state.queue?.length ? src.state.queue : [src.state.track]
-      time = (src.state.position || 0) + (src.state.playing ? (Date.now() - src.state.at) / 1000 : 0)
+      time = (src.state.position || 0) + (src.state.playing ? Math.max(0, (serverNow() - src.state.at) / 1000) : 0)
     }
-    const sentAt = Date.now()
+    const sentAt = serverNow()
     online.forEach((d) => sendCommand(d.id, 'playFrom', { tracks, index: 0, time, sentAt }))
     if (p.current && p.playing) {
       // Already playing here — leave it running.
@@ -509,9 +569,9 @@ export function CloudProvider({ children }) {
     [],
   )
 
-  const now = Date.now()
+  const now = serverNow()
   const list = devices
-    .map((d) => ({ ...d, online: now - (d.lastSeen || 0) < ONLINE_MS, me: d.id === myId }))
+    .map((d) => ({ ...d, online: d.id === myId || (d.lastSeen > 0 && Math.abs(now - d.lastSeen) < ONLINE_MS), me: d.id === myId }))
     .sort((a, b) => b.me - a.me || b.online - a.online || (b.lastSeen || 0) - (a.lastSeen || 0))
 
   const value = {
@@ -557,11 +617,14 @@ export const useCloud = () => useContext(Ctx)
  */
 export function RemoteBridge({ cloud, children }) {
   const local = usePlayer()
+  const toast = useToast()
   const [connectedId, setConnectedId] = useState(null)
   const [optimistic, setOptimistic] = useState(null) // { stateAt, playing, position, at }
+  const [silent, setSilent] = useState({}) // deviceId → lastSeen when it stopped answering
   const [, tick] = useState(0)
 
-  const others = cloud.devices.filter((d) => !d.me && d.online && d.state?.track)
+  // A device that didn't answer is ignored until it checks in again.
+  const others = cloud.devices.filter((d) => !d.me && d.online && d.state?.track && silent[d.id] !== d.lastSeen)
   const playingElsewhere = others.find((d) => d.state.playing)
 
   // Pick which device the UI follows.
@@ -585,7 +648,7 @@ export function RemoteBridge({ cloud, children }) {
   const duration = s?.track?.duration || 0
   const timeNow = () => {
     if (!eff) return 0
-    const t = (eff.position || 0) + (eff.playing ? (Date.now() - (eff.at || Date.now())) / 1000 : 0)
+    const t = (eff.position || 0) + (eff.playing ? Math.max(0, (serverNow() - (eff.at || serverNow())) / 1000) : 0)
     return Math.max(0, duration ? Math.min(duration, t) : t)
   }
 
@@ -597,11 +660,22 @@ export function RemoteBridge({ cloud, children }) {
 
   if (!remote) return children
 
-  const send = (type, payload) => cloud.sendCommand(remote.id, type, payload)
+  // If the device doesn't pick the command up, say so (never fail silently)
+  // and stop following it; `here` offers to do the same thing on this device.
+  const send = (type, payload, here) =>
+    cloud.sendCommand(remote.id, type, payload).then((ok) => {
+      if (ok) return
+      setOptimistic(null)
+      setSilent((m) => ({ ...m, [remote.id]: remote.lastSeen }))
+      toast(`${remote.name} isn’t responding.`, here ? { action: { label: 'Play here', run: here } } : undefined)
+    })
   const queue = s.queue?.length ? s.queue : [s.track]
   const sendList = (tracks, i = 0, time = 0) =>
-    send('playFrom', { tracks: tracks.slice(i, i + 50).map(strip), index: 0, time, quiet: true })
-  const optimisticSet = (patch) => setOptimistic({ stateAt: s.at, playing: eff.playing, position: timeNow(), at: Date.now(), ...patch })
+    send('playFrom', { tracks: tracks.slice(i, i + 50).map(strip), index: 0, time, quiet: true }, () =>
+      local.playFrom(tracks, i, time),
+    )
+  const resumeHere = () => local.playFrom(queue, 0, timeNow())
+  const optimisticSet = (patch) => setOptimistic({ stateAt: s.at, playing: eff.playing, position: timeNow(), at: serverNow(), ...patch })
 
   const value = {
     ...local,
@@ -624,7 +698,7 @@ export function RemoteBridge({ cloud, children }) {
     resolving: false,
     getTime: timeNow,
     toggle: () => {
-      send('toggle')
+      send('toggle', undefined, eff.playing ? undefined : resumeHere)
       optimisticSet({ playing: !eff.playing })
     },
     next: () => {

@@ -19,7 +19,7 @@ import {
 } from 'lucide-react'
 import { formatTime } from '../lib/tracks'
 import { usePlayer } from '../player/PlayerProvider'
-import { useCloud } from '../store/cloud'
+import { serverNow, useCloud } from '../store/cloud'
 import { useUi } from '../store/ui'
 import Artwork from './Artwork'
 import { IconButton, PillButton, Spinner } from './ui'
@@ -225,7 +225,7 @@ function Remote({ device }) {
     return () => clearInterval(id)
   }, [s.playing])
 
-  const position = Math.min(track?.duration || Infinity, (s.position || 0) + (s.playing ? (Date.now() - (s.at || Date.now())) / 1000 : 0))
+  const position = Math.min(track?.duration || Infinity, (s.position || 0) + (s.playing ? Math.max(0, (serverNow() - (s.at || serverNow())) / 1000) : 0))
   const duration = track?.duration || 0
   const send = (type, payload) => cloud.sendCommand(device.id, type, payload)
 
@@ -336,7 +336,7 @@ function DeviceIcon({ kind, light }) {
 
 function ago(ms) {
   if (!ms) return 'a while ago'
-  const s = Math.round((Date.now() - ms) / 1000)
+  const s = Math.max(0, Math.round((serverNow() - ms) / 1000))
   if (s < 90) return 'just now'
   const m = Math.round(s / 60)
   if (m < 60) return `${m} min ago`

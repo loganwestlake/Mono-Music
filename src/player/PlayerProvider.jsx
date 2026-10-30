@@ -32,7 +32,8 @@ const SILENCE =
  *             MAX_STREAM_TRIES different servers are tried per song.
  *   youtube — the official (youtube-nocookie) embedded player, the last
  *             resort. Ads there can't be removed from outside the iframe,
- *             but they're detected, muted and counted down.
+ *             so each load stays muted behind "Please wait" until the song
+ *             itself is confirmed to be playing.
  * Both elements are created once and never moved, so playback continues
  * while the listener browses.
  *
@@ -290,41 +291,60 @@ export function PlayerProvider({ children }) {
     }
   }
 
-  /* ── YouTube ad detection ─────────────────────────────────────────── */
-  // The IFrame API doesn't expose ads, but while one plays the player
-  // reports the *ad's* duration. If that's clearly shorter than the song we
-  // asked for, an ad is on: mute it and show a countdown.
+  /* ── YouTube ads: muted until proven ─────────────────────────────── */
+  // The IFrame API doesn't say when an ad plays, and what it does report
+  // during one varies (the ad's length, 0, or the song's length with the
+  // clock stuck). So every YouTube load starts muted and hidden behind
+  // "Please wait", and sound comes on only once the song itself is clearly
+  // playing: the right length, and its clock moving from where we started.
   const adRef = useRef(null)
   adRef.current = ad
+  const verifyRef = useRef(null) // { start } while a YouTube load is unproven
+  function guardYouTube(start) {
+    verifyRef.current = { start }
+    if (muteAds) {
+      adMutedRef.current = true
+      ytRef.current?.mute?.()
+    }
+  }
   function detectAd() {
     const yt = ytRef.current
     const track = currentRef.current
-    if (engineRef.current !== 'youtube' || !yt || !track) return false
+    const pending = verifyRef.current
+    if (engineRef.current !== 'youtube' || !yt || !track || !pending) return false
     const expected = (albumModeRef.current && track.playId ? track.playDuration : track.duration) || 0
     const d = yt.getDuration?.() || 0
     const t = yt.getCurrentTime?.() || 0
-    const isAd = expected > 30 && d > 0 && d < expected - 8 && d <= 180
-    if (isAd) {
-      setAd({ remaining: Math.max(0, d - t), elapsed: t })
-      if (muteAds && !adMutedRef.current && !yt.isMuted?.()) {
-        adMutedRef.current = true
-        yt.mute?.()
-      }
-      // Quietly look for an ad-free copy once per song; the listener just
-      // sees "please wait" and a spinner meanwhile.
-      if (streamMode && adRetriedRef.current !== track.id) {
-        adRetriedRef.current = track.id
-        handlers.current.escapeAd?.()
-      }
-    } else if (adRef.current) {
-      setAd(null)
+    const moved = t - pending.start
+    // Close to the expected length; or a full-length video that keeps
+    // playing (a different edit of the song) rather than staying muted forever.
+    const rightLength =
+      expected > 30 ? d >= expected - 8 || (d >= 90 && d >= expected - 35 && moved > 6) || (d >= 90 && moved > 20) : d > 30
+    if (d > 0 && rightLength && moved > 0.4) {
+      // It's the song. Rewind the bit that played muted, then sound on.
+      verifyRef.current = null
+      if (moved < 3) yt.seekTo?.(pending.start, true)
+      if (adRef.current) setAd(null)
       if (adMutedRef.current) {
         adMutedRef.current = false
         if (!muted) yt.unMute?.()
       }
+      return false
     }
-    return isAd
+    if (!adRef.current) setAd({ remaining: 0, elapsed: 0 })
+    if (muteAds && !yt.isMuted?.()) {
+      adMutedRef.current = true
+      yt.mute?.()
+    }
+    // A real ad (wrong length) → quietly look for an ad-free copy once per
+    // song; the listener just sees "please wait" and a spinner meanwhile.
+    if (streamMode && d > 0 && !rightLength && adRetriedRef.current !== track.id) {
+      adRetriedRef.current = track.id
+      handlers.current.escapeAd?.()
+    }
+    return true
   }
+  handlers.current.detectAd = detectAd
 
   /* ── Create both engines once a mount point exists ────────────────── */
   useEffect(() => {
@@ -466,6 +486,7 @@ export function PlayerProvider({ children }) {
     pendingYtRef.current = null
     const id = playIdOf(currentRef.current)
     setNeedsTap(false)
+    guardYouTube(start)
     if (wantPlayRef.current) {
       yt.loadVideoById({ videoId: id, startSeconds: start })
       const startToken = tokenRef.current
@@ -634,7 +655,7 @@ export function PlayerProvider({ children }) {
   useEffect(() => {
     if (!playing) return
     const id = setInterval(() => {
-      if (detectAd()) return
+      if (handlers.current.detectAd()) return
       setTime(eng.time())
       if (sleepRef.current?.at && Date.now() >= sleepRef.current.at) {
         eng.pause()
@@ -789,8 +810,10 @@ export function PlayerProvider({ children }) {
   )
 
   const toggle = useCallback(() => {
-    if (!current || adRef.current) return
-    if (playing) eng.pause()
+    if (!current) return
+    // Pausing always works, even during "Please wait" (the sound stays off
+    // until the song is confirmed when it resumes).
+    if (playing || (adRef.current && wantPlayRef.current)) eng.pause()
     else {
       wantPlayRef.current = true
       eng.play()
@@ -816,6 +839,7 @@ export function PlayerProvider({ children }) {
   const [seeks, setSeeks] = useState(0) // lets other devices know the position jumped
   const seek = useCallback(
     (seconds) => {
+      if (verifyRef.current) verifyRef.current.start = seconds
       eng.seek(seconds)
       setTime(seconds)
       setSeeks((n) => n + 1)
@@ -1001,7 +1025,7 @@ export function PlayerProvider({ children }) {
       needsTap,
       seeks,
       duration: duration || current?.duration || 0,
-      loading: !!ad || resolving || (buffering && wantPlayRef.current),
+      loading: (!!ad && wantPlayRef.current) || resolving || (buffering && wantPlayRef.current),
       jump,
       removeAt,
       setUpcoming,
