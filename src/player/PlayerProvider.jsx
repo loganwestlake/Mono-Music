@@ -3,6 +3,7 @@ import { describePlayerError, loadYouTubeApi, PLAYER_VARS } from '../lib/youtube
 import { artistRadio } from '../lib/deezer'
 import { load, save } from '../lib/storage'
 import { hasProxy } from '../lib/instances'
+import { findAlbumVersion } from '../lib/search'
 import { forgetStream, prefetchStream, resolveStream } from '../lib/streams'
 import { isUnresolved, parseVideoTitle, shuffled, thumbUrl } from '../lib/tracks'
 import { useLibrary } from '../store/library'
@@ -56,6 +57,13 @@ export function PlayerProvider({ children }) {
   const { adFree, autoplay, muteAds, notifications } = library.settings
   const { viewMode } = useUi()
   const preferAudio = IS_TOUCH && viewMode !== 'video'
+  // Play the album recording (YouTube Music "Topic" upload) instead of a
+  // video upload when we can: it's the exact audio lyrics are timed to.
+  const albumMode = library.settings.albumAudio !== false && viewMode !== 'video'
+  const albumModeRef = useRef(albumMode)
+  albumModeRef.current = albumMode
+  /** The YouTube id actually loaded for a track. */
+  const playIdOf = (t) => (albumModeRef.current && t?.playId) || t?.id
   const [saved] = useState(() => load('player', SAVED_DEFAULTS))
 
   const [queue, setQueue] = useState(saved.queue)
@@ -238,7 +246,7 @@ export function PlayerProvider({ children }) {
   handlers.current.streamFailed = () => {
     const track = currentRef.current
     if (engineRef.current !== 'stream' || !track) return
-    forgetStream(track.id)
+    forgetStream(playIdOf(track))
     const at = eng.time() || pendingSeekRef.current
     if (triedRef.current.length < MAX_STREAM_TRIES) loadStream(at)
     else fallbackToYouTube(at)
@@ -282,7 +290,7 @@ export function PlayerProvider({ children }) {
     const yt = ytRef.current
     const track = currentRef.current
     if (engineRef.current !== 'youtube' || !yt || !track) return false
-    const expected = track.duration || 0
+    const expected = (albumModeRef.current && track.playId ? track.playDuration : track.duration) || 0
     const d = yt.getDuration?.() || 0
     const t = yt.getCurrentTime?.() || 0
     const isAd = expected > 30 && d > 0 && d < expected - 8 && d <= 180
@@ -441,7 +449,7 @@ export function PlayerProvider({ children }) {
       return
     }
     pendingYtRef.current = null
-    const id = currentRef.current.id
+    const id = playIdOf(currentRef.current)
     setNeedsTap(false)
     if (wantPlayRef.current) {
       yt.loadVideoById({ videoId: id, startSeconds: start })
@@ -482,7 +490,7 @@ export function PlayerProvider({ children }) {
     switchEngine('stream')
     eng.stopInactive()
     setBuffering(wantPlayRef.current)
-    resolveStream(track.id, { exclude: triedRef.current, preferAudio })
+    resolveStream(playIdOf(track), { exclude: triedRef.current, preferAudio })
       .then((src) => {
         if (token !== tokenRef.current) return
         mediaKindRef.current = src.hasVideo ? 'video' : 'audio'
@@ -528,8 +536,22 @@ export function PlayerProvider({ children }) {
       return
     }
 
+    // Look up the album version once per track (max ~2.5s, then carry on).
+    if (albumMode && current.playId === undefined && !current.pending) {
+      const id = current.id
+      setBuffering(true)
+      Promise.race([findAlbumVersion(current), new Promise((r) => setTimeout(() => r(null), 2500))]).then((hit) => {
+        if (currentRef.current?.id !== id) return
+        const usable = hit?.id && hit.id !== id ? hit : null
+        setQueue((q) =>
+          q.map((t) => (t.id === id ? { ...t, playId: usable ? usable.id : null, playDuration: usable?.duration || 0 } : t)),
+        )
+      })
+      return
+    }
+
     const mode = adFree ? 'stream' : 'youtube'
-    const key = `${current.id}|${mode}${mode === 'stream' && preferAudio ? '-a' : ''}`
+    const key = `${current.id}|${playIdOf(current)}|${mode}${mode === 'stream' && preferAudio ? '-a' : ''}`
     if (loadedKeyRef.current === key) return
 
     const sameTrack = loadedKeyRef.current?.startsWith(`${current.id}|`)
@@ -548,7 +570,7 @@ export function PlayerProvider({ children }) {
 
     if (mode === 'youtube') return loadYouTube(start)
     loadStream(start)
-  }, [mountEl, current, adFree, preferAudio]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mountEl, current, adFree, preferAudio, albumMode]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // A YouTube load that was waiting for the API.
   useEffect(() => {
@@ -564,10 +586,20 @@ export function PlayerProvider({ children }) {
     const id = setTimeout(async () => {
       const vid = isUnresolved(upcoming) ? await resolve(upcoming) : upcoming.id
       if (vid && vid !== upcoming.id) setQueue((q) => q.map((t) => (t.id === upcoming.id ? { ...t, id: vid } : t)))
-      if (vid && adFree) prefetchStream(vid, { preferAudio })
+      if (!vid) return
+      let play = vid
+      if (albumMode && upcoming.playId === undefined) {
+        const hit = await findAlbumVersion({ ...upcoming, id: vid })
+        const usable = hit?.id && hit.id !== vid ? hit : null
+        setQueue((q) =>
+          q.map((t) => (t.id === vid ? { ...t, playId: usable ? usable.id : null, playDuration: usable?.duration || 0 } : t)),
+        )
+        if (usable) play = usable.id
+      }
+      if (adFree) prefetchStream(play, { preferAudio })
     }, 4000)
     return () => clearTimeout(id)
-  }, [playing, upcoming, adFree, preferAudio, resolve])
+  }, [playing, upcoming, adFree, preferAudio, albumMode, resolve])
 
   /* ── Clock, ads, sleep timer, listening time ──────────────────────── */
   const sleepRef = useRef(sleep)
@@ -798,14 +830,14 @@ export function PlayerProvider({ children }) {
     const track = currentRef.current
     if (!track) return
     const token = tokenRef.current
-    resolveStream(track.id, { exclude: [], preferAudio })
+    resolveStream(playIdOf(track), { exclude: [], preferAudio })
       .then(() => {
         if (token !== tokenRef.current || currentRef.current?.id !== track.id) return
         setAd(null)
         adMutedRef.current = false
         ytRef.current?.unMute?.()
         triedRef.current = []
-        loadedKeyRef.current = `${track.id}|stream${preferAudio ? '-a' : ''}`
+        loadedKeyRef.current = `${track.id}|${playIdOf(track)}|stream${preferAudio ? '-a' : ''}`
         tokenRef.current++
         loadStream(0)
       })

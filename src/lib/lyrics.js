@@ -8,6 +8,10 @@
  *   · synced lyrics within ±3s of the real duration → synced
  *   · within ±10s → synced but flagged "approximate" (tap-to-sync helps)
  *   · otherwise → shown unsynced rather than guessing
+ *
+ * YouTube uploads (lyric videos, music videos) are often a few seconds
+ * longer than the album because of an intro. When the video is longer by a
+ * small amount, `autoOffset` shifts the lyrics by exactly that much.
  */
 
 const cache = new Map()
@@ -54,7 +58,7 @@ async function lookup({ title, artist }) {
   const want = t.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
   return out.filter((h) => {
     const got = cleanSongTitle(h.trackName || h.name || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
-    return got && (got.includes(want) || want.includes(got))
+    return !got || got.includes(want) || want.includes(got)
   })
 }
 
@@ -76,8 +80,15 @@ export function pickLyrics(candidates, duration) {
   const diff = (h) => (duration && h.duration ? Math.abs(h.duration - duration) : 0)
   const best = [...synced].sort((a, b) => diff(a) - diff(b))[0]
 
-  if (best && (!duration || diff(best) <= 10)) {
-    return { synced: true, approx: !duration || diff(best) > 3, lines: parseLrc(best.syncedLyrics) }
+  if (best && duration && best.duration) {
+    const extra = duration - best.duration // seconds the video runs longer than the album
+    if (Math.abs(extra) <= 1.5) return { synced: true, approx: false, autoOffset: 0, lines: parseLrc(best.syncedLyrics) }
+    // Longer by a little → an intro before the song starts: delay the lyrics.
+    if (extra > 1.5 && extra <= 20)
+      return { synced: true, approx: true, autoOffset: -extra, lines: parseLrc(best.syncedLyrics) }
+    if (Math.abs(extra) <= 10) return { synced: true, approx: true, autoOffset: 0, lines: parseLrc(best.syncedLyrics) }
+  } else if (best) {
+    return { synced: true, approx: true, autoOffset: 0, lines: parseLrc(best.syncedLyrics) }
   }
   const plain = [...candidates].filter((h) => h.plainLyrics).sort((a, b) => diff(a) - diff(b))[0]
   const text = plain?.plainLyrics || best?.plainLyrics
@@ -85,6 +96,7 @@ export function pickLyrics(candidates, duration) {
   return {
     synced: false,
     approx: false,
+    autoOffset: 0,
     lines: text.split('\n').map((line, i) => ({ at: i, text: line.trim() })).filter((l) => l.text),
   }
 }

@@ -219,3 +219,41 @@ export async function matchTrack({ title, artist, duration }, { apiKey } = {}) {
   }
   return [...tracks].sort((a, b) => score(b) - score(a))[0]
 }
+
+/* ── Album version of a song (for exact lyric timing) ─────────────────
+ * YouTube Music's auto-generated "Artist - Topic" uploads are the album
+ * recordings — the exact audio lyrics are timed against, with no video
+ * intro or skit. Resolves to { id, duration }, or null if there isn't one.
+ */
+const albumCache = new Map()
+
+export function findAlbumVersion(track) {
+  if (albumCache.has(track.id)) return albumCache.get(track.id)
+  const wantTitle = norm(cleanForMatch(track.title))
+  const wantArtist = norm(track.artist).split(' ')[0]
+  const p = raceInstances(
+    async (base) => {
+      const data = await getJson(`${base}/search?q=${encodeURIComponent(`${track.artist} ${track.title}`)}&filter=music_songs`)
+      const items = (data.items || []).filter((i) => i.type === 'stream' && i.url)
+      const hit = items.find((i) => {
+        const title = norm(cleanForMatch(i.title))
+        const by = norm(i.uploaderName || '')
+        return (title === wantTitle || title.startsWith(wantTitle) || wantTitle.startsWith(title)) && (!wantArtist || by.includes(wantArtist))
+      })
+      if (!hit) return null
+      return { id: new URL(hit.url, 'https://youtube.com').searchParams.get('v'), duration: hit.duration > 0 ? hit.duration : 0 }
+    },
+    null,
+    { wave: 3, waves: 2 },
+  )
+    .then(({ value }) => value)
+    .catch(() => null)
+  albumCache.set(track.id, p)
+  return p
+}
+
+const cleanForMatch = (t = '') =>
+  t
+    .replace(/\s*[([][^)\]]*[)\]]/g, '')
+    .replace(/\s+(feat|ft)\.?\s.+$/i, '')
+    .trim()

@@ -12,6 +12,7 @@ export const DEFAULT_SETTINGS = {
   adFree: true,
   autoplay: true, // keep playing similar music when the queue ends
   muteAds: true,
+  albumAudio: true, // play the album recording (exact lyric timing) when one exists
   notifications: false,
   theme: 'light',
   spotifyClientId: '',

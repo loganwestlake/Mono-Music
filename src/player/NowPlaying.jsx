@@ -42,7 +42,7 @@ import { useUi } from '../store/ui'
 import { AdChip } from './PlayerBar'
 import { useMiniWindow } from './MiniWindow'
 import { usePlayer, usePlayerTime } from './PlayerProvider'
-import { activeLineIndex, useLyrics, useTrackOffset } from './useLyrics'
+import { activeLineIndex, effectiveOffset, useLyrics, useTrackOffset } from './useLyrics'
 
 /**
  * The "Now Playing" view. Rendered exactly once for the app's lifetime
@@ -457,14 +457,14 @@ export function VolumeControl({ className = 'mt-4 hidden w-full max-w-[220px] it
 /* ── Lyrics preview (opens the full Apple-style view) ───────────────── */
 
 function Lyrics({ track }) {
-  const { loading, lines: all, synced } = useLyrics(track)
+  const { loading, lines: all, synced, autoOffset } = useLyrics(track)
   const { time } = usePlayerTime()
   const offset = useTrackOffset(track)
   const { setLyricsOpen } = useUi()
   if (!track) return null
 
   const lines = all.filter((l) => l.text)
-  const current = synced ? activeLineIndex(lines, time + offset.total) : -1
+  const current = synced ? activeLineIndex(lines, time + effectiveOffset(offset, autoOffset)) : -1
   const preview = synced ? lines.slice(Math.max(0, current), Math.max(0, current) + 3) : lines.slice(0, 3)
 
   return (

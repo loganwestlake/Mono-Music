@@ -19,10 +19,11 @@ import { useToast } from './toast'
  */
 
 const Ctx = createContext(null)
+export const CloudContext = Ctx
 
 const LOCAL_ONLY_SETTINGS = ['apiKey', 'spotifyClientId']
 const ONLINE_MS = 70_000
-const HEARTBEAT_MS = 25_000
+const HEARTBEAT_MS = 15_000
 
 /* ── helpers ────────────────────────────────────────────────────────── */
 

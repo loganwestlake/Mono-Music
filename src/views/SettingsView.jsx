@@ -141,6 +141,12 @@ export default function SettingsView() {
         >
           <Toggle checked={settings.adFree !== false} onChange={(v) => updateSettings({ adFree: v })} />
         </Row>
+        <Row
+          title="Play album versions"
+          hint="Plays the official album recording of a song instead of a music or lyric video, so lyrics line up exactly and there are no video intros. Turns off automatically in Video view."
+        >
+          <Toggle checked={settings.albumAudio !== false} onChange={(v) => updateSettings({ albumAudio: v })} />
+        </Row>
         <Row title="Mute YouTube ads" hint="If a song has to use YouTube and an ad starts, it’s muted and counted down, with a Skip button after 5 seconds.">
           <Toggle checked={settings.muteAds !== false} onChange={(v) => updateSettings({ muteAds: v })} />
         </Row>

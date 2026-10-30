@@ -32,6 +32,7 @@ export function useLyrics(track) {
     lines: picked?.lines ?? [],
     synced: !!picked?.synced,
     approx: !!picked?.approx,
+    autoOffset: picked?.autoOffset || 0,
   }
 }
 
@@ -52,5 +53,13 @@ export function useTrackOffset(track) {
   const own = (track && map[track.id]) || 0
   const set = (v) => track && updateSettings({ lyricOffsets: { ...map, [track.id]: Math.round(v * 10) / 10 } })
   return { own, total: own + (settings.lyricsOffset || 0), set }
+}
+
+/**
+ * Offset actually applied: a manual per-song adjustment (Sync / ±) replaces
+ * the automatic intro correction; the global setting always applies.
+ */
+export function effectiveOffset(offset, autoOffset) {
+  return offset.own !== 0 ? offset.total : offset.total + (autoOffset || 0)
 }
 

@@ -9,7 +9,7 @@ import { useLibrary } from '../store/library'
 import { useToast } from '../store/toast'
 import { PlayButton } from './NowPlaying'
 import { usePlayer, usePlayerTime } from './PlayerProvider'
-import { activeLineIndex, useLyrics, useTrackOffset } from './useLyrics'
+import { activeLineIndex, effectiveOffset, useLyrics, useTrackOffset } from './useLyrics'
 
 /**
  * Full-screen, Apple Music–style lyrics.
@@ -231,7 +231,7 @@ function Backdrop({ track }) {
 }
 
 function LyricsBody({ track, syncMode, setSyncMode }) {
-  const { loading, lines, synced, approx } = useLyrics(track)
+  const { loading, lines, synced, approx, autoOffset } = useLyrics(track)
   const { settings } = useLibrary()
   const offset = useTrackOffset(track)
   const { getTime } = usePlayer()
@@ -263,12 +263,12 @@ function LyricsBody({ track, syncMode, setSyncMode }) {
 
   return synced ? (
     <>
-      {(approx || syncMode) && offset.own === 0 && (
+      {(syncMode || (approx && !autoOffset)) && offset.own === 0 && (
         <p className="absolute top-3 left-5 z-10 rounded-full bg-white/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-white/70 backdrop-blur lg:left-0">
           {syncMode ? 'Tap the line that’s being sung now' : 'Timing may be off for this version — tap Sync'}
         </p>
       )}
-      <SyncedLyrics lines={lines} size={settings.lyricsSize} offset={offset.total} onPick={syncMode ? syncTo : null} />
+      <SyncedLyrics lines={lines} size={settings.lyricsSize} offset={effectiveOffset(offset, autoOffset)} onPick={syncMode ? syncTo : null} />
     </>
   ) : (
     <PlainLyrics lines={lines} size={settings.lyricsSize} />
